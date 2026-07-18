@@ -16,7 +16,7 @@
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { ev, Clock, toMilli, fromMilli, formatMoney, DEFAULT_CURRENCY, monthOf, AccountType, RTA_INFLOW } from "@kym/contract";
-import { computeState, checkInvariant, mergeEvents, listTransactions } from "@kym/engine";
+import { computeState, checkInvariant, mergeEvents, listTransactions, suggestCategory } from "@kym/engine";
 import { parseExport, fingerprint } from "./importers.mjs";
 import { readFileSync as fsRead } from "node:fs";
 
@@ -25,7 +25,7 @@ import { readFileSync as fsRead } from "node:fs";
 const VALUE_FLAGS = new Set(["--file", "--device", "--type", "--balance", "--group",
   "--account", "--category", "--payee", "--memo", "--date", "--month", "--currency",
   "--format", "--delimiter", "--date-col", "--amount-col", "--payee-col", "--by"]);
-const BOOL_FLAGS = new Set(["--off-budget", "--set", "--dry-run", "--adjust"]);
+const BOOL_FLAGS = new Set(["--off-budget", "--set", "--dry-run", "--adjust", "--no-categorize"]);
 
 const RAW = process.argv.slice(2);
 const FLAGS = {};
@@ -259,29 +259,35 @@ switch (cmd) {
     });
     // dedup against already-imported rows (by fingerprint stored in importId)
     const seen = new Set(mergeEvents(doc.events).filter((e) => e.type === "txn.create" && e.payload.importId).map((e) => e.payload.importId));
+    const histEvents = [...doc.events];   // learn categories from history as it stood before this import
     const c = clockFor(doc);
-    let added = 0, dupes = 0;
+    let added = 0, dupes = 0, autoCat = 0;
     const dry = argValue("--dry-run");
+    const noCat = argValue("--no-categorize");
     for (const row of parsed.rows) {
       const fp = fingerprint(row, acct.id);
       if (seen.has(fp)) { dupes++; continue; }
       seen.add(fp);
       added++;
+      // Learn the category from how this payee was categorized before.
+      const guess = noCat ? null : suggestCategory(histEvents, { payee: row.payee, memo: row.memo });
+      if (guess) autoCat++;
       if (!dry) {
         doc.events.push(ev.txnCreate(c.send(), {
           txnId: randomUUID(), accountId: acct.id, amount: row.amount,
           date: row.date, payeeId: row.payee || undefined, memo: row.memo || undefined,
+          categoryId: guess ? guess.categoryId : undefined,
           cleared: "cleared", importId: fp,
         }));
       }
       if (dry || added <= 8) {
-        console.log(`  ${row.date.slice(0, 10)}  ${formatMoney(row.amount, ccy).padStart(14)}  ${row.payee || "—"}`);
+        console.log(`  ${row.date.slice(0, 10)}  ${formatMoney(row.amount, ccy).padStart(14)}  ${(row.payee || "—").padEnd(20)}${guess ? "→ " + guess.name : ""}`);
       }
     }
     if (!dry) save(doc);
     console.log(`\n${dry ? "[dry-run] " : ""}Imported ${added} transaction(s) from ${parsed.format} export` +
       `${dupes ? `, ${dupes} duplicate(s) skipped` : ""}${parsed.skipped ? `, ${parsed.skipped} unparseable row(s)` : ""}.`);
-    if (!dry && added) console.log("(uncategorized — they sit in Ready to Assign until you categorize them)");
+    if (!dry && added) console.log(`${autoCat} auto-categorized from your history; ${added - autoCat} uncategorized (sit in Ready to Assign until you categorize them).`);
     break;
   }
 

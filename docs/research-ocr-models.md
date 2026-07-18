@@ -36,6 +36,16 @@ Licenses of the leading small options are permissive (**Apache-2.0 / MIT**) → 
 - Optionally, the receipt image syncs to the Basecamp module (over the same Delivery channel), where a small VLM extracts **structured line items** and proposes a categorized split — the phone stays thin, the desktop does the heavy AI.
 - This also composes with the **MCP assistant** (#9): a `parse_receipt(image)` tool backed by the local VLM.
 
+## AI-ingest architecture (decided) — the goal is a *categorized* transaction
+
+Extracting fields is only half the job; the point is to land the txn in the **right category**. Category-matching is a mostly-separate, easier problem than OCR, so KYM layers it:
+
+1. **Learned categorizer — model-free, shipped** (`suggestCategory` in `@kym/engine`). Ranks the user's categories by how they've categorized this payee before (payee match weighted over memo). Instant, private, improves with use. Already wired into **bank import** (auto-categorizes known merchants; unknowns stay in Ready to Assign) and exposed as the **`suggest_category` MCP tool**; next: the mobile OCR prefill (history first, keyword map fallback).
+2. **Small LLM for unknown merchants** — `merchant + amount + [the user's categories] → category` is a tiny text-classification task a sub-1B model (e.g. Qwen ~0.8B) handles well, on mobile or the desktop hub.
+3. **Desktop VLM for structure** — image → line items + a suggested split for hard receipts.
+
+**Don't sync images on the common path.** Do OCR on the phone; sync only the extracted fields/text (tiny, no 150 KB-cap pain). Sync a **downscaled grayscale JPEG** (~50–150 KB, chunked over the existing CHUNK envelope) only when the user asks the desktop VLM to re-process for line items.
+
 ## Sources
 - [Best open-weight OCR & document AI models 2026 (Presenc)](https://presenc.ai/research/best-open-weight-ocr-document-ai-models-2026)
 - [HF: microsoft/Florence-2-base](https://huggingface.co/microsoft/Florence-2-base) · [nanonets/Nanonets-OCR-s](https://huggingface.co/nanonets/Nanonets-OCR-s)

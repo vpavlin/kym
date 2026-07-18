@@ -1,1 +1,1 @@
-export { computeState, checkInvariant, mergeEvents, listTransactions, AccountType } from "./engine.mjs";
+export { computeState, checkInvariant, mergeEvents, listTransactions, suggestCategory, AccountType } from "./engine.mjs";

@@ -3,7 +3,7 @@
 // or sees raw events — each tool returns engine-COMPUTED values (+ a human
 // `text` summary), so the model can only route and phrase, never hallucinate a
 // number. All money is formatted in the budget currency at the edge.
-import { computeState, checkInvariant, listTransactions } from "@kym/engine";
+import { computeState, checkInvariant, listTransactions, suggestCategory as engineSuggest } from "@kym/engine";
 import { formatMoney, toMilli, monthOf } from "@kym/contract";
 
 const CREDIT = new Set(["creditCard", "lineOfCredit"]);
@@ -140,6 +140,15 @@ export function can_i_afford(events, ccy, { amount, category } = {}) {
     text: `Ready to Assign is ${m(rta)}. ${ok ? "Yes" : "No"}, ${m(amt)} ${ok ? "fits" : `does not fit — short by ${m(amt - rta)}`}.` };
 }
 
+export function suggest_category(events, ccy, { payee, memo } = {}) {
+  const g = engineSuggest(events, { payee, memo });
+  if (!g) return { suggestion: null, text: `No history match for "${payee || memo}" — leave it uncategorized or pick manually.` };
+  return {
+    suggestion: { category: g.name, timesSeen: g.count, basis: g.basis },
+    text: `Based on your history, "${payee || memo}" is usually ${g.name} (seen ${g.count}×). Suggest: ${g.name}.`,
+  };
+}
+
 // Registry: name -> { fn, description, inputSchema } for the server to expose.
 export const TOOLS = {
   budget_summary: { fn: budget_summary, description: "Overview of the budget for a month (Ready to Assign, counts, invariant).",
@@ -158,4 +167,6 @@ export const TOOLS = {
     inputSchema: { type: "object", properties: {} } },
   can_i_afford: { fn: can_i_afford, description: "Whether an amount fits in Ready to Assign, or in a given category's available.",
     inputSchema: { type: "object", properties: { amount: { type: "number" }, category: { type: "string" } }, required: ["amount"] } },
+  suggest_category: { fn: suggest_category, description: "Suggest a budget category for a payee, learned from how the user categorized that payee before.",
+    inputSchema: { type: "object", properties: { payee: { type: "string" }, memo: { type: "string" } }, required: ["payee"] } },
 };

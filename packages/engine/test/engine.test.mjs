@@ -183,6 +183,22 @@ test("category targets compute funding need (monthly / balance)", () => {
   assert.equal(s2.targetProgress.groc.onTrack, true);
 });
 
+test("suggestCategory learns merchant->category from the user's history", async () => {
+  const { suggestCategory } = await import("@kym/engine");
+  const h = mk("A");
+  const events = [
+    ev.accountCreate(h(), { accountId: "chk", name: "Checking", accountType: AccountType.CHECKING, startingBalance: 100000, startDate: dateIn(M) }),
+    ev.categoryCreate(h(), { categoryId: "groc", groupId: "g1", name: "Groceries" }),
+    ev.categoryCreate(h(), { categoryId: "dine", groupId: "g1", name: "Dining" }),
+    ev.txnCreate(h(), { txnId: "a1", accountId: "chk", amount: -25000, date: dateIn(M), categoryId: "groc", payeeId: "Albert" }),
+    ev.txnCreate(h(), { txnId: "a2", accountId: "chk", amount: -18000, date: dateIn(M), categoryId: "groc", payeeId: "Albert Praha" }),
+    ev.txnCreate(h(), { txnId: "k1", accountId: "chk", amount: -8000, date: dateIn(M), categoryId: "dine", payeeId: "Kavárna" }),
+  ];
+  assert.equal(suggestCategory(events, { payee: "Albert" })?.name, "Groceries");
+  assert.equal(suggestCategory(events, { payee: "Kavárna Praha" })?.name, "Dining"); // either-contains match
+  assert.equal(suggestCategory(events, { payee: "Unknown Shop" }), null);
+});
+
 test("income to Ready-to-Assign inflow feeds the pool", () => {
   const h = mk("A");
   const events = [
