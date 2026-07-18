@@ -54,7 +54,7 @@ static QString slug(const QString &name) {
 kym::HLC KymBackend::nextHlc() {
   qint64 t = QDateTime::currentMSecsSinceEpoch();
   if (t > m_wall) { m_wall = t; m_ctr = 0; } else { m_ctr++; }
-  return kym::HLC{m_wall, m_ctr, std::string("basecamp")};
+  return kym::HLC{m_wall, m_ctr, m_deviceId.toStdString()};
 }
 
 QString KymBackend::currentMonth() const { return QDate::currentDate().toString("yyyy-MM"); }
@@ -271,11 +271,41 @@ void KymBackend::ingestSealed(const QByteArray &sealed) {
     return;
   }
   QByteArray bytes(reinterpret_cast<const char *>(pt.data()), (int)pt.size());
-  kym::Event e;
-  if (!kym::decodeEventEnvelope(bytes, e)) return;
-  if (m_eventIds.count(e.id)) return;        // already have it (Store replay)
+  QJsonParseError err{};
+  const QJsonDocument doc = QJsonDocument::fromJson(bytes, &err);
+  if (err.error != QJsonParseError::NoError || !doc.isObject()) return;
+  const QJsonObject env = doc.object();
+  const QString type = env.value("type").toString();
+  if (type == "SYNC_REQ") {
+    // a peer joined and asked for backfill — re-serve our log (debounced)
+    if (env.value("from").toString() != m_deviceId) scheduleBackfill();
+    return;
+  }
+  if (type != "EVENT") return;
+  kym::Event e = kym::eventFromJson(env.value("event").toObject());
+  if (m_eventIds.count(e.id)) return;        // already have it (Store replay / our own resync)
   pushEvent(e, /*broadcast=*/false);         // ingested — never re-broadcast
   publishBudget();
+}
+
+void KymBackend::sendSyncReq() {
+  if (!m_nodeReady) return;
+  const QJsonObject env{{"v", 1}, {"type", "SYNC_REQ"}, {"from", m_deviceId},
+                        {"reqId", QUuid::createUuid().toString(QUuid::WithoutBraces)}};
+  const QByteArray plain = QJsonDocument(env).toJson(QJsonDocument::Compact);
+  kym::Bytes nonce(12);
+  RAND_bytes(nonce.data(), 12);
+  kym::Bytes sealed = kym::seal(m_id, kym::Bytes(plain.begin(), plain.end()), m_topic.toStdString(), nonce);
+  modules().delivery_module.send(m_topic, QByteArray(reinterpret_cast<const char *>(sealed.data()), (int)sealed.size()));
+}
+
+void KymBackend::scheduleBackfill() {
+  if (m_backfillPending) return;             // debounce a burst of requests into one re-serve
+  m_backfillPending = true;
+  QTimer::singleShot(2000, [this]() {
+    m_backfillPending = false;
+    if (m_nodeReady) for (const auto &e : m_log) sealAndSend(e);
+  });
 }
 
 void KymBackend::bootstrap() {
@@ -294,11 +324,28 @@ void KymBackend::bootstrap() {
   modules().delivery_module.subscribe(m_topic);
   m_nodeReady = true;
   setStatus(QStringLiteral("Connected · paired"));
+  // Once the mesh has settled, ask peers to re-serve their logs so a freshly
+  // (re)installed instance catches up; our arrival also triggers their backfill.
+  QTimer::singleShot(6000, [this]() { sendSyncReq(); });
 }
 
 void KymBackend::loadOrCreateSecret() {
   m_dataDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/kym";
   QDir().mkpath(m_dataDir);
+
+  // Per-instance device id (HLC tiebreak + backfill self-dedup). Persisted so a
+  // restart keeps the same identity; env override for deterministic tests.
+  const QByteArray envDev = qgetenv("KYM_DEVICE_ID");
+  if (!envDev.isEmpty()) m_deviceId = QString::fromLatin1(envDev);
+  else {
+    QFile df(m_dataDir + "/device.id");
+    if (df.open(QIODevice::ReadOnly)) { m_deviceId = QString::fromUtf8(df.readAll()).trimmed(); df.close(); }
+    if (m_deviceId.isEmpty() || m_deviceId == "basecamp") {
+      m_deviceId = "bc-" + QUuid::createUuid().toString(QUuid::WithoutBraces).left(8);
+      QSaveFile out(m_dataDir + "/device.id");
+      if (out.open(QIODevice::WriteOnly)) { out.write(m_deviceId.toUtf8()); out.commit(); }
+    }
+  }
 
   kym::Bytes secret;
   const QByteArray envHex = qgetenv("KYM_HOUSEHOLD_SECRET");   // test override: shared key

@@ -47,12 +47,16 @@ private:
 
   // --- Delivery sync ---
   QString m_dataDir;
+  QString m_deviceId = "basecamp";           // per-instance id (HLC tiebreak + backfill dedup)
   bool m_nodeReady = false;
+  bool m_backfillPending = false;            // debounce backfill re-serves
   kym::Identity m_id;                        // household key (from the shared secret)
   QString m_topic;                           // derived content topic
   void bootstrap();                          // delivery node + subscribe
-  void loadOrCreateSecret();                 // household secret in the data dir
+  void loadOrCreateSecret();                 // household secret + device id in the data dir
   void sealAndSend(const kym::Event &e);     // encrypt + delivery.send one event
+  void sendSyncReq();                        // ask peers to re-serve their logs
+  void scheduleBackfill();                   // debounced resync() in response to a peer's request
   void ingestSealed(const QByteArray &sealed); // open -> decode -> merge -> refold
   void rebuildNameMaps();                    // re-derive name maps from the log (after ingest)
   void loadPersistedLog();
