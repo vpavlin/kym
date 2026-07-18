@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "name": "kym",
+  "displayName": "KYM — Know Your Money",
+  "description": "Local-first zero-based budget — a Logos Basecamp module. Envelope categories, a monthly grid, accounts and credit-card handling, computed by a conflict-free append-only event-log engine (the same engine the mobile app and peers fold).",
+  "homepage": "https://github.com/vpavlin/kym",
+  "indexUrl": "https://raw.githubusercontent.com/vpavlin/kym/master/repo/index.json",
+  "trustedSigners": []
+}

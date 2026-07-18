@@ -35,6 +35,18 @@ node cli/kym.mjs --file laptop.json budget
 # then: cp laptop.json phone.json, edit each offline, and `kym sync` them → they converge.
 ```
 
+## Install & distribute
+
+**Basecamp module** — add this repository in Basecamp → Settings → Package Repositories, then install **KYM**:
+
+```
+https://raw.githubusercontent.com/vpavlin/kym/master/repo/logos-repo.json
+```
+
+Releases are cut by pushing a `module-v*` tag: CI (`.github/workflows/release-module.yml`) builds the portable `.lgx`, attaches it to a GitHub Release, and refreshes `repo/index.json` on `master`. Regenerate the index locally with `scripts/gen-repo-index.sh module-vX.Y.Z`.
+
+**Mobile app** — Android APK via the self-hosted F-Droid repo (arm64). The APK is built and **signed locally** (`scripts/build-apk.sh` + `scripts/release-apk.sh`, tag `mobile-v*`) — the signing key never touches CI. On the LAN, `scripts/serve-lan.sh` serves both the Basecamp package repo and the F-Droid repo over one HTTPS host.
+
 ## Status
 
 Phase 0 **done**: the portable engine, wire contract, convergence proof, and a usable CLI budget all work (`npm test` green; concurrent offline edits converge with the zero-based invariant holding). Phase 1 (the Basecamp C++/QML module mirroring this engine) and the mobile capture app follow. See [`docs/plan.md`](docs/plan.md).

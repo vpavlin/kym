@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 2,
+  "repositoryName": "kym",
+  "generatedAt": "2026-07-18T10:22:54Z",
+  "packages": [
+    {
+      "name": "kym",
+      "versions": [
+        {
+          "releasedAt": "2026-07-18T10:22:54Z",
+          "publisherRef": "kym-module-v0.1.0",
+          "url": "https://github.com/vpavlin/kym/releases/download/module-v0.1.0/logos-kym-module-linux-amd64.lgx",
+          "size": 3853003,
+          "sha256": "99469f21fa8778d7177a85724d68e002a58b74464510a3f52dd5075c616d932f",
+          "rootHash": "d6f38483b62824a846721f18f62199b20241a97d42bf14c4f81e9e06b28c785b",
+          "manifest": {
+            "author": "",
+            "category": "finance",
+            "dependencies": [],
+            "description": "Local-first zero-based budget. Envelope categories, a monthly grid, accounts and credit-card handling \u2014 all computed by a conflict-free, append-only event-log engine (the same engine the mobile app and peers fold).",
+            "hashes": {
+              "root": "d6f38483b62824a846721f18f62199b20241a97d42bf14c4f81e9e06b28c785b",
+              "variants": "8ac385dab26cda551c73ad4de7bc7efb690f3d51f1621daf186223038eeb464c",
+              "variants/linux-amd64": "bcd2f7c82a72a3f365d9e0f082e4028f05fdb56cfeb18e54d60f6b689d8c9146"
+            },
+            "icon": "",
+            "main": {
+              "linux-amd64": "kym_plugin.so"
+            },
+            "manifestVersion": "0.2.0",
+            "name": "kym",
+            "type": "ui_qml",
+            "version": "0.1.0",
+            "view": "qml/Main.qml"
+          }
+        }
+      ]
+    }
+  ]
+}
