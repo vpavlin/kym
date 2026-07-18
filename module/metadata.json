@@ -1,0 +1,24 @@
+{
+  "name": "kym",
+  "display_name": "KYM — Know Your Money",
+  "version": "0.1.0",
+  "type": "ui_qml",
+  "interface": "universal",
+  "category": "finance",
+  "description": "Local-first zero-based budget. Envelope categories, a monthly grid, accounts and credit-card handling — all computed by a conflict-free, append-only event-log engine (the same engine the mobile app and peers fold).",
+  "main": "kym_plugin",
+  "view": "qml/Main.qml",
+  "dependencies": [],
+  "codegen": { "rep": "src/kym.rep" },
+
+  "nix": {
+    "packages": { "build": [], "runtime": [] },
+    "external_libraries": [],
+    "cmake": {
+      "find_packages": [],
+      "extra_sources": [],
+      "extra_include_dirs": [],
+      "extra_link_libraries": []
+    }
+  }
+}

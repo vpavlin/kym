@@ -4,3 +4,7 @@ result
 result-*
 *.log
 .DS_Store
+
+# module build artifacts
+module/result
+module/result-*

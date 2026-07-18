@@ -1,0 +1,38 @@
+// View contract for the KYM budget module. QML gets a typed replica via
+// logos.module("kym"): PROPs auto-sync, SLOTs are callable (async).
+// Amounts are passed as human strings ("10.50") and parsed to integer
+// milliunits in the backend — money never rides as a float. SLOTs return ""
+// on success, or an error string.
+class Kym
+{
+    // Bootstrap → ready status line for the header.
+    PROP(QString status="Starting…" READONLY)
+
+    // True once the backend has folded an initial budget.
+    PROP(bool ready=false READONLY)
+
+    // The folded BudgetState as JSON — the whole view renders off this:
+    // { currentMonth, readyToAssign, invariant:{ok,assets,categoriesAvail},
+    //   accounts:[{id,name,type,onBudget,balance}],
+    //   groups:[{id,name,categories:[{id,name,assigned,activity,available,negative}]}],
+    //   creditCardPayments:[{account,name,available}] }
+    PROP(QString budgetJson="{}" READONLY)
+
+    // Seed a realistic sample budget (accounts, categories, income, spending).
+    SLOT(QString loadDemo())
+
+    // Open an account. type ∈ checking|savings|cash|creditCard|lineOfCredit|tracking.
+    SLOT(QString addAccount(QString name, QString type, QString balance))
+
+    // Create a category under a (created-on-demand) group.
+    SLOT(QString addCategory(QString name, QString group))
+
+    // Assign (delta) money to a category for a month (YYYY-MM, empty = current).
+    SLOT(QString assign(QString category, QString month, QString amount))
+
+    // Record spending: an outflow from an account, charged to a category.
+    SLOT(QString spend(QString amount, QString account, QString category))
+
+    // Move budgeted money between two categories (net-zero) for a month.
+    SLOT(QString moveMoney(QString fromCategory, QString toCategory, QString month, QString amount))
+}
