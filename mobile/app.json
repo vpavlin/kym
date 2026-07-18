@@ -20,6 +20,7 @@
     },
     "plugins": [
       "./plugins/withReleaseSigning",
+      "./plugins/withLogosDelivery",
       "expo-secure-store",
       [
         "expo-camera",

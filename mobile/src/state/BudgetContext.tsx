@@ -24,6 +24,12 @@ import { appendEvents, clearLog, loadLog } from "../lib/eventLog";
 import { buildSeedEvents, listTransactions } from "../lib/budget";
 import type { TxnView } from "../lib/budget";
 import { loadSettings, saveSettings } from "../lib/settings";
+import { deliveryAvailable, ensureNode, sendEnvelope, startReceiving } from "../lib/delivery";
+import { loadIdentity } from "../lib/identityStore";
+
+// UI-facing sync state. "offline" covers the emulator/web (no native .so) and any
+// node bring-up failure; "not paired" means there is no household secret yet.
+export type SyncStatus = "offline" | "not paired" | "connecting" | "syncing";
 
 export interface AddExpenseInput {
   amountMilli: number; // POSITIVE magnitude in milliunits; stored negated (outflow)
@@ -55,6 +61,7 @@ interface BudgetContextValue {
   addCategory: (name: string, groupId: string) => Promise<void>;
   seedDemo: () => Promise<void>;
   resetAll: () => Promise<void>;
+  syncStatus: SyncStatus;
 }
 
 const BudgetContext = createContext<BudgetContextValue | null>(null);
@@ -66,7 +73,18 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
   const [deviceId, setDeviceId] = useState("dev-loading");
   const [events, setEvents] = useState<KymEvent[]>([]);
   const [budgetCurrency, setBudgetCurrencyState] = useState<string>(DEFAULT_CURRENCY);
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>("offline");
   const clockRef = useRef<Clock | null>(null);
+  // Always-current view of the log for the receive callback (which is registered
+  // once and otherwise would capture a stale `events`) and for best-effort sends.
+  const eventsRef = useRef<KymEvent[]>([]);
+  useEffect(() => {
+    eventsRef.current = events;
+  }, [events]);
+  // True once we've decided this build+device can sync (native module present and
+  // paired). Gates best-effort sends so we don't retry node bring-up on capture
+  // when we're on the emulator/web or unpaired.
+  const syncActiveRef = useRef(false);
 
   // Boot: resolve device id, build the HLC clock, load the persisted log + settings.
   useEffect(() => {
@@ -101,13 +119,74 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
   const invariant = useMemo(() => checkInvariant(state), [state]);
   const txns = useMemo(() => listTransactions(events), [events]);
 
+  // Append events (local or remote) through the deduping log. Uses eventsRef so it
+  // is stable and always sees the latest log — safe to call from the receive
+  // callback registered once at mount. appendEvents returns the same array
+  // reference when nothing new was added (dedup), so we only re-render on a change.
+  const ingest = useCallback(async (incoming: KymEvent[]): Promise<KymEvent[]> => {
+    const next = await appendEvents(eventsRef.current, incoming);
+    if (next !== eventsRef.current) {
+      eventsRef.current = next;
+      setEvents(next);
+    }
+    return next;
+  }, []);
+
   const commit = useCallback(
     async (newEvents: KymEvent[]) => {
-      const next = await appendEvents(events, newEvents);
-      setEvents(next);
+      await ingest(newEvents);
+      // Best-effort publish to the household over Delivery. Fire-and-forget:
+      // capture must NEVER block on (or fail because of) the network.
+      if (syncActiveRef.current) {
+        for (const e of newEvents) {
+          sendEnvelope(e).catch(() => {
+            /* offline / no peers / node not up — the event is already in the log */
+          });
+        }
+      }
     },
-    [events]
+    [ingest]
   );
+
+  // Sync bring-up: register the receiver and mark ourselves online once the node
+  // is up. Everything is wrapped so unpaired / emulator / no-peers degrades to
+  // "offline" and NEVER crashes or blocks the app.
+  useEffect(() => {
+    if (!ready) return;
+    let alive = true;
+    let unsub: (() => void) | null = null;
+    (async () => {
+      try {
+        if (!deliveryAvailable()) {
+          if (alive) setSyncStatus("offline"); // native .so absent (emulator/web)
+          return;
+        }
+        const id = await loadIdentity();
+        if (!id) {
+          if (alive) setSyncStatus("not paired");
+          return;
+        }
+        if (!alive) return;
+        syncActiveRef.current = true;
+        setSyncStatus("connecting");
+        // Register the receiver BEFORE the node settles so we don't miss early
+        // Store replays; incoming events go through the same deduping ingest.
+        unsub = startReceiving((event) => {
+          ingest([event]).catch(() => {});
+        });
+        await ensureNode();
+        if (alive) setSyncStatus("syncing");
+      } catch {
+        // NOT_PAIRED, UnsatisfiedLinkError (arm64 .so on x86_64), no peers, etc.
+        syncActiveRef.current = false;
+        if (alive) setSyncStatus("offline");
+      }
+    })();
+    return () => {
+      alive = false;
+      if (unsub) unsub();
+    };
+  }, [ready, ingest]);
 
   const clock = () => {
     if (!clockRef.current) throw new Error("clock not ready");
@@ -222,6 +301,7 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
     addCategory,
     seedDemo,
     resetAll,
+    syncStatus,
   };
 
   return <BudgetContext.Provider value={value}>{children}</BudgetContext.Provider>;

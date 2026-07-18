@@ -29,6 +29,24 @@ const TABS: { key: Tab; label: string; icon: string }[] = [
   { key: "pair", label: "Pair", icon: "⧉" },
 ];
 
+// Tiny dot + label reflecting the Delivery sync state. Minimal on purpose.
+const SYNC_COLOR: Record<string, string> = {
+  syncing: "#3fb950",
+  connecting: theme.accent,
+  "not paired": theme.textDim,
+  offline: theme.textDim,
+};
+
+function SyncIndicator() {
+  const { syncStatus } = useBudget();
+  return (
+    <View style={styles.sync}>
+      <View style={[styles.syncDot, { backgroundColor: SYNC_COLOR[syncStatus] ?? theme.textDim }]} />
+      <Text style={styles.syncText}>{syncStatus}</Text>
+    </View>
+  );
+}
+
 function Shell() {
   const { ready } = useBudget();
   const [tab, setTab] = useState<Tab>("add");
@@ -67,11 +85,13 @@ export default function App() {
   return (
     <SafeAreaView style={styles.root}>
       <StatusBar barStyle="light-content" backgroundColor={theme.bg} />
-      <View style={styles.header}>
-        <Text style={styles.brand}>KYM</Text>
-        <Text style={styles.brandSub}>Know Your Money · offline</Text>
-      </View>
       <BudgetProvider>
+        <View style={styles.header}>
+          <Text style={styles.brand}>KYM</Text>
+          <Text style={styles.brandSub}>Know Your Money</Text>
+          <View style={styles.headerSpacer} />
+          <SyncIndicator />
+        </View>
         <Shell />
       </BudgetProvider>
     </SafeAreaView>
@@ -90,6 +110,10 @@ const styles = StyleSheet.create({
   },
   brand: { color: theme.accent, fontSize: 20, fontWeight: "900", letterSpacing: 2 },
   brandSub: { color: theme.textDim, fontSize: 12 },
+  headerSpacer: { flex: 1 },
+  sync: { flexDirection: "row", alignItems: "center", gap: 5 },
+  syncDot: { width: 8, height: 8, borderRadius: 4 },
+  syncText: { color: theme.textDim, fontSize: 11 },
   body: { flex: 1 },
   content: { flex: 1 },
   loading: { flex: 1, alignItems: "center", justifyContent: "center", gap: 12 },
