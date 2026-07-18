@@ -1,0 +1,16 @@
+{
+  "name": "@kym/mcp",
+  "version": "0.1.0",
+  "description": "KYM MCP server — ask an AI about your budget, locally. Read-only tools over @kym/engine; the model routes + phrases, the engine computes the numbers.",
+  "type": "module",
+  "main": "src/server.mjs",
+  "bin": { "kym-mcp": "src/server.mjs" },
+  "exports": { ".": "./src/server.mjs", "./tools": "./src/tools.mjs" },
+  "dependencies": {
+    "@kym/contract": "file:../contract",
+    "@kym/engine": "file:../engine",
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  },
+  "scripts": { "test": "node --test" },
+  "private": true
+}
