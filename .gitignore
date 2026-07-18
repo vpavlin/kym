@@ -12,3 +12,7 @@ module/result-*
 # preview generated files
 module/preview/budget.json
 module/preview/budget.js
+
+# editor preview
+module/preview/preview-editor.qml
+module/preview/kym-editor.png

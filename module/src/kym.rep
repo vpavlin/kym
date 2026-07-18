@@ -41,6 +41,16 @@ class Kym
     // Record spending: an outflow from an account, charged to a category.
     SLOT(QString spend(QString amount, QString account, QString category))
 
+    // Record income: an inflow to an account, landing in Ready to Assign.
+    SLOT(QString income(QString amount, QString account))
+
+    // Set a category funding target. type ∈ monthly|balance|balanceByDate.
+    SLOT(QString setTarget(QString category, QString targetType, QString amount, QString month))
+
+    // Reconcile an account to its real (bank) balance; books an uncategorized
+    // adjustment (→ Ready to Assign) when KYM and the bank differ.
+    SLOT(QString reconcile(QString account, QString actual))
+
     // Move budgeted money between two categories (net-zero) for a month.
     SLOT(QString moveMoney(QString fromCategory, QString toCategory, QString month, QString amount))
 }

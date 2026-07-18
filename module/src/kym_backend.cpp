@@ -136,7 +136,7 @@ void KymBackend::txnEv(const QString &acctId, kym::Money amt, const QString &mon
   e.s["accountId"] = acctId.toStdString();
   e.n["amount"] = amt;
   e.s["date"] = (month + "-15T12:00:00Z").toStdString();
-  e.s["categoryId"] = catId.toStdString();
+  if (!catId.isEmpty()) e.s["categoryId"] = catId.toStdString();  // empty = uncategorized (→ RTA)
   pushEvent(e, true);
 }
 
@@ -180,6 +180,38 @@ QString KymBackend::spend(QString amount, QString account, QString category) {
   if (acc.isEmpty()) return "unknown account: " + account;
   if (cat.isEmpty()) return "unknown category: " + category;
   txnEv(acc, -std::llabs(toMilli(amount)), currentMonth(), cat);
+  publishBudget();
+  return "";
+}
+
+QString KymBackend::income(QString amount, QString account) {
+  QString acc = findAccountId(account);
+  if (acc.isEmpty()) return "unknown account: " + account;
+  txnEv(acc, std::llabs(toMilli(amount)), currentMonth(), QString::fromStdString(kym::RTA_INFLOW));
+  publishBudget();
+  return "";
+}
+
+QString KymBackend::setTarget(QString category, QString targetType, QString amount, QString month) {
+  QString cat = findCategoryId(category);
+  if (cat.isEmpty()) return "unknown category: " + category;
+  auto e = baseEvent("category.target", nextHlc());
+  e.s["categoryId"] = cat.toStdString();
+  e.s["targetType"] = targetType.toStdString();
+  e.n["amount"] = toMilli(amount);
+  if (!month.isEmpty()) e.s["targetMonth"] = month.toStdString();
+  pushEvent(e, true);
+  publishBudget();
+  return "";
+}
+
+QString KymBackend::reconcile(QString account, QString actual) {
+  QString acc = findAccountId(account);
+  if (acc.isEmpty()) return "unknown account: " + account;
+  kym::BudgetState st = kym::computeState(m_log);
+  kym::Money bal = st.balances.count(acc.toStdString()) ? st.balances[acc.toStdString()] : 0;
+  kym::Money diff = toMilli(actual) - bal;
+  if (diff != 0) txnEv(acc, diff, currentMonth(), QString());  // uncategorized adjustment → RTA
   publishBudget();
   return "";
 }
@@ -489,8 +521,10 @@ void KymBackend::publishBudget() {
       c["id"] = cid;
       c["name"] = m_categoryName.value(cid, cid);
       c["assigned"] = money(a, bc);
+      c["assignedRaw"] = (double)a;
       c["activity"] = money(act, bc);
       c["available"] = money(avail, bc);
+      c["availableRaw"] = (double)avail;
       c["negative"] = avail < 0;
       QString tgt; bool tgtOk = true;
       auto tit = st.targetProgress.find(cidStd);

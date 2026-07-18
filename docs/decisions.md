@@ -45,4 +45,4 @@ Tools return engine-computed values; the model routes/phrases and can't hallucin
 Fully open-source, nothing gated. Revenue = routing idle envelope money into Aave/vaults non-custodially for a fee cut, + a voluntary one-time licence; near-term Logos/IFT grant. **Status: decided; DeFi specifics under research (#10).** See `strategy.md`.
 
 ## 15. "Thin phone, value in Basecamp" — ASPIRATIONAL, not yet true
-Intent: the desktop module is the full budgeting surface; the phone is fast capture. **Reality today: the module is a read-only viewer; the CLI is the full surface and mobile is the richer editor.** Closing this (a desktop editor UI + missing SLOTs) is the top parity gap. **Status: open.** See `parity.md`.
+Intent: the desktop module is the full budgeting surface; the phone is fast capture. **Reality today: the module is a read-only viewer; the CLI is the full surface and mobile is the richer editor.** Closing this is the top parity gap. **Status: largely closed** — the module is now an editor (command bar + inline forms + click-to-assign; new SLOTs income/setTarget/reconcile). Remaining: categorize/import/report SLOTs + a UX polish pass. See `parity.md`.

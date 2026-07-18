@@ -30,6 +30,9 @@ public:
   QString addCategory(QString name, QString group) override;
   QString assign(QString category, QString month, QString amount) override;
   QString spend(QString amount, QString account, QString category) override;
+  QString income(QString amount, QString account) override;
+  QString setTarget(QString category, QString targetType, QString amount, QString month) override;
+  QString reconcile(QString account, QString actual) override;
   QString moveMoney(QString fromCategory, QString toCategory, QString month, QString amount) override;
 
 protected:
