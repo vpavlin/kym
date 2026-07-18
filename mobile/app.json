@@ -6,6 +6,9 @@
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "scheme": "kym",
+    "experiments": {
+      "onDemandFilesystem": false
+    },
     "android": {
       "package": "co.logos.kym",
       "versionCode": 1,

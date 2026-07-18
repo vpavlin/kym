@@ -1,20 +1,24 @@
 // Metro config — the integration seam that lets React Native bundle the SHARED
 // engine/contract packages (plain ESM `.mjs` in the npm workspace at ../packages).
 //
-// Three problems Metro has out of the box, and how each is solved here:
+// The problems Metro has out of the box with this setup, and how each is solved
+// (full write-up in mobile/README.md):
 //
 //  1. The packages live OUTSIDE mobile/ (in ../packages). Metro only watches the
-//     project root by default → add the monorepo root to `watchFolders`.
-//  2. The sources are `.mjs`. Metro's default `sourceExts` has no `mjs` → add it.
-//  3. `@kym/contract` uses package.json `exports` subpaths (`@kym/contract/hlc`)
+//     project root by default → add ../packages to `watchFolders`.
+//  2. `@kym/contract` uses package.json `exports` subpaths (`@kym/contract/hlc`)
 //     and, critically, `events.mjs` imports `randomUUID` from `node:crypto`, which
-//     does not exist in React Native. Metro's default resolver honours neither the
-//     `exports` map nor Node core modules → a custom `resolveRequest` maps every
-//     bare `@kym/*` specifier straight to its `.mjs` file and rewrites `node:crypto`
-//     (and bare `crypto`) to a tiny Expo-backed shim (shims/crypto.js).
+//     does not exist in React Native. So a custom `resolveRequest` maps every bare
+//     `@kym/*` specifier straight to its `.mjs` file and rewrites `node:crypto`
+//     (and bare `crypto`) to a tiny Expo-backed shim (shims/crypto.js). (`.mjs` is
+//     already in Expo's default `sourceExts`.)
+//  3. Watchman/lazy-SHA1 hazards for files outside the project root — see the two
+//     `config` overrides below.
+//  4. Expo's on-demand filesystem drops external watchFolders on export — disabled
+//     via app.json `expo.experiments.onDemandFilesystem: false` (NOT here).
 //
 // Net effect: the phone bundles and runs the exact same `computeState` fold as the
-// desktop module — no vendored fork, no drift. See mobile/README.md.
+// desktop module — no vendored fork, no drift.
 
 const { getDefaultConfig } = require("expo/metro-config");
 const path = require("path");
@@ -25,8 +29,27 @@ const packagesRoot = path.resolve(monorepoRoot, "packages");
 
 const config = getDefaultConfig(projectRoot);
 
-// (1) Watch the monorepo so Metro can read files under ../packages.
-config.watchFolders = [monorepoRoot];
+// Force Metro's Node filesystem crawler. Watchman is not installed in every dev
+// environment; when Metro probes for it and it is missing, external watchFolders
+// (our ../packages) can end up absent from the file map, surfacing as a spurious
+// "Failed to get the SHA-1" for packages/engine/src/index.mjs. The Node crawler
+// maps the external sources reliably.
+config.resolver.useWatchman = false;
+
+// Compute file SHA-1s eagerly during the crawl. Metro's default lazy SHA-1
+// (`watcher.unstable_lazySha1`) computes hashes on demand, and for source files
+// that live OUTSIDE the project root (our ../packages/*.mjs) that lazy path
+// throws "Failed to get the SHA-1" — even though the file is watched and mapped.
+// Eager hashing (matching Metro's classic behaviour) resolves the external
+// sources correctly. See mobile/README.md for the full write-up.
+config.watcher = config.watcher || {};
+config.watcher.unstable_lazySha1 = false;
+
+// (1) Watch the shared packages so Metro's file map includes their .mjs sources.
+// We watch `../packages` specifically (not the whole monorepo ancestor of the
+// project root) — an ancestor watchFolder confuses Metro's crawler and yields
+// "Failed to get the SHA-1" for files it resolved but never mapped.
+config.watchFolders = [packagesRoot];
 
 // (2) Teach Metro that `.mjs` is source.
 config.resolver.sourceExts = Array.from(
