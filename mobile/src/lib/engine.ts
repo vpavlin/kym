@@ -7,6 +7,7 @@ export {
   computeState,
   checkInvariant,
   mergeEvents,
+  suggestCategory,
 } from "@kym/engine";
 export type {
   BudgetState,
@@ -14,6 +15,7 @@ export type {
   CategoryView,
   AccountView,
   Invariant,
+  CategorySuggestion,
 } from "@kym/engine";
 
 export {

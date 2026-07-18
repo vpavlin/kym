@@ -223,12 +223,28 @@ declare module "@kym/engine" {
     ok: boolean;
   }
 
+  export interface CategorySuggestion {
+    categoryId: string;
+    name: string;
+    count: number;
+    basis: string;
+  }
+
   export function computeState(
     events: KymEvent[],
     opts?: { asOf?: string }
   ): BudgetState;
   export function checkInvariant(state: BudgetState): Invariant;
   export function mergeEvents(...logs: KymEvent[][]): KymEvent[];
+  /**
+   * Learn a category for a new transaction from the user's own history (how they
+   * categorized this payee/memo before). Returns a suggestion whose categoryId is
+   * already a real budget category, or null when there is no signal.
+   */
+  export function suggestCategory(
+    events: KymEvent[],
+    hint?: { payee?: string; memo?: string }
+  ): CategorySuggestion | null;
   export const AccountType: Record<string, string>;
 }
 

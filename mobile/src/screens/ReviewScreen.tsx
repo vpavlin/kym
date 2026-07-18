@@ -12,12 +12,13 @@ import {
   View,
 } from "react-native";
 import { useBudget } from "../state/BudgetContext";
-import { formatMoney } from "../lib/engine";
+import { formatMoney, suggestCategory } from "../lib/engine";
 import { theme } from "../ui/theme";
 import type { TxnView } from "../lib/budget";
 
 export function ReviewScreen() {
-  const { txns, state, setTxnCategory, setTxnCleared, budgetCurrency } = useBudget();
+  const { txns, events, state, setTxnCategory, setTxnCleared, budgetCurrency } =
+    useBudget();
   const [editing, setEditing] = useState<TxnView | null>(null);
 
   const catName = (id?: string | null) =>
@@ -55,6 +56,15 @@ export function ReviewScreen() {
         ) : null}
         {ordered.map((t) => {
           const cn = catName(t.categoryId);
+          // For an UNCATEGORIZED txn, learn a category from the user's own history
+          // (this payee/memo). One tap on the chip accepts it via the same edit
+          // path the sheet uses. Nothing shows when there's no signal.
+          const suggestion = !t.categoryId
+            ? suggestCategory(events, {
+                payee: (t as any).payeeId,
+                memo: t.memo,
+              })
+            : null;
           return (
             <Pressable key={t.txnId} style={styles.item} onPress={() => setEditing(t)}>
               <View style={{ flex: 1 }}>
@@ -65,6 +75,14 @@ export function ReviewScreen() {
                   {acctName(t.accountId)} · {new Date(t.date as any).toLocaleDateString()} ·{" "}
                   {t.cleared === "cleared" ? "cleared" : "uncleared"}
                 </Text>
+                {suggestion ? (
+                  <Pressable
+                    style={styles.suggest}
+                    onPress={() => setTxnCategory(t.txnId, suggestion.categoryId)}
+                  >
+                    <Text style={styles.suggestText}>→ {suggestion.name}?</Text>
+                  </Pressable>
+                ) : null}
               </View>
               <Text style={styles.amount}>
                 {formatMoney(t.amount, acctCurrency(t.accountId))}
@@ -160,6 +178,17 @@ const styles = StyleSheet.create({
   cat: { color: theme.text, fontSize: 16, fontWeight: "700" },
   catNeeded: { color: theme.warn },
   meta: { color: theme.textDim, fontSize: 12, marginTop: 4 },
+  suggest: {
+    alignSelf: "flex-start",
+    marginTop: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: theme.surfaceAlt,
+    borderWidth: 1,
+    borderColor: theme.accent,
+  },
+  suggestText: { color: theme.accent, fontWeight: "700", fontSize: 13 },
   amount: { color: theme.danger, fontSize: 18, fontWeight: "800" },
   backdrop: { flex: 1, backgroundColor: "#000a", justifyContent: "flex-end" },
   sheet: {

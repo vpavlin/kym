@@ -9,11 +9,12 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from "react-native";
 import * as ImagePicker from "expo-image-picker";
 import { useBudget } from "../state/BudgetContext";
-import { formatMoney } from "../lib/engine";
+import { formatMoney, suggestCategory } from "../lib/engine";
 import { DEFAULT_ACCOUNT } from "../lib/budget";
 import { recognizeReceipt } from "../lib/ocr";
 import { guessCategory } from "../lib/categoryGuess";
@@ -33,12 +34,15 @@ function isoToEpoch(iso: string): number {
 }
 
 export function CaptureScreen({ goSetup }: { goSetup: () => void }) {
-  const { state, addExpense, budgetCurrency } = useBudget();
+  const { state, events, addExpense, budgetCurrency } = useBudget();
   const [cents, setCents] = useState(0); // ATM-style entry: digits shift in from the right
   const [accountId, setAccountId] = useState<string | null>(null);
   const [categoryId, setCategoryId] = useState<string | null>(null);
   const [cleared, setCleared] = useState(false);
   const [flash, setFlash] = useState<string | null>(null);
+  // Optional payee for a manual capture. If typed, we offer a learned category as
+  // the default (pre-selected, always overridable) and stash it as the memo.
+  const [payee, setPayee] = useState("");
   // Receipt-scan state. All of it is an editable PREFILL — the user confirms the
   // amount on the keypad and can retap category/account before Save.
   const [scanBusy, setScanBusy] = useState(false);
@@ -92,14 +96,27 @@ export function CaptureScreen({ goSetup }: { goSetup: () => void }) {
       setReceiptMemo(fields.merchant ?? null);
       setReceiptDate(fields.date ? isoToEpoch(fields.date) : null);
 
-      // Prefill category from the merchant, mapped to the user's real category by
-      // name. Only if we didn't already have a manual choice on screen.
-      const guessName = guessCategory(fields.merchant ?? fields.rawText);
-      if (guessName && categoryId === null) {
-        const match = categories.find(
-          (c) => c.name.toLowerCase() === guessName.toLowerCase()
-        );
-        if (match) setCategoryId(match.id);
+      // Prefill category. HISTORY FIRST: how has the user categorized this
+      // merchant before? suggestCategory returns a real category id already, so
+      // use it directly. Only if that yields nothing do we fall back to the static
+      // keyword map (guessCategory), mapping its category NAME to a real id. Either
+      // way we only prefill when the user hasn't already picked a category.
+      if (categoryId === null) {
+        const merchant = fields.merchant ?? "";
+        // Match both fields: imported bank rows carry payeeId, app-native captures
+        // store the merchant in memo — pass merchant as both so history matches either.
+        const learned = suggestCategory(events, { payee: merchant, memo: merchant });
+        if (learned) {
+          setCategoryId(learned.categoryId);
+        } else {
+          const guessName = guessCategory(merchant + " " + (fields.rawText ?? ""));
+          if (guessName) {
+            const match = categories.find(
+              (c) => c.name.toLowerCase() === guessName.toLowerCase()
+            );
+            if (match) setCategoryId(match.id);
+          }
+        }
       }
 
       if (fields.amount || fields.merchant || fields.date) {
@@ -138,6 +155,16 @@ export function CaptureScreen({ goSetup }: { goSetup: () => void }) {
     else setCents((c) => Math.min(c * 10 + Number(k), 9_999_999)); // cap ~ $99,999.99
   };
 
+  // Manual capture: when the user finishes typing a payee, offer a learned
+  // category as the default. Non-intrusive — only pre-selects when nothing is
+  // chosen yet, and the user can still tap any chip to override.
+  const suggestFromPayee = () => {
+    const p = payee.trim();
+    if (!p || categoryId !== null) return;
+    const learned = suggestCategory(events, { payee: p, memo: p });
+    if (learned) setCategoryId(learned.categoryId);
+  };
+
   const canSave = amountMilli > 0 && !!activeAccount;
 
   const save = async () => {
@@ -151,7 +178,9 @@ export function CaptureScreen({ goSetup }: { goSetup: () => void }) {
       // the merchant as the memo. Both are undefined for a plain manual capture,
       // so the existing defaults (now / no memo) apply. Category was already
       // prefilled into `categoryId` and is overridable, so it rides along as-is.
-      memo: receiptMemo ?? undefined,
+      // Prefer the scanned merchant; else the manually typed payee. Undefined for
+      // a plain capture (existing "no memo" default applies).
+      memo: receiptMemo ?? (payee.trim() ? payee.trim() : undefined),
       date: receiptDate ?? undefined,
     });
     const acctName = accounts.find((a) => a.id === activeAccount)?.name ?? "account";
@@ -160,6 +189,7 @@ export function CaptureScreen({ goSetup }: { goSetup: () => void }) {
     setCents(0);
     setCategoryId(null);
     setCleared(false);
+    setPayee("");
     clearReceipt();
     setTimeout(() => setFlash(null), 1600);
   };
@@ -216,6 +246,20 @@ export function CaptureScreen({ goSetup }: { goSetup: () => void }) {
           <Text style={styles.scanBtnText}>⧉  Scan receipt</Text>
         )}
       </Pressable>
+
+      {/* Optional payee. Typing one and moving on offers a learned category as
+          the default (pre-selected below — always overridable). */}
+      <TextInput
+        style={styles.payeeInput}
+        placeholder="Payee (optional)"
+        placeholderTextColor={theme.textDim}
+        value={payee}
+        onChangeText={setPayee}
+        onEndEditing={suggestFromPayee}
+        onBlur={suggestFromPayee}
+        returnKeyType="done"
+        autoCapitalize="words"
+      />
 
       {/* Optional context: category (defaults to Uncategorized → Review inbox). */}
       <ScrollView
@@ -331,6 +375,17 @@ const styles = StyleSheet.create({
     borderColor: theme.border,
   },
   scanBtnText: { color: theme.text, fontSize: 15, fontWeight: "700" },
+  payeeInput: {
+    marginTop: 12,
+    height: 44,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+    backgroundColor: theme.surface,
+    borderWidth: 1,
+    borderColor: theme.border,
+    color: theme.text,
+    fontSize: 15,
+  },
   flash: {
     backgroundColor: theme.surfaceAlt,
     borderRadius: 10,
