@@ -16,7 +16,7 @@
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { ev, Clock, toMilli, fromMilli, formatMoney, DEFAULT_CURRENCY, monthOf, AccountType, RTA_INFLOW } from "@kym/contract";
-import { computeState, checkInvariant, mergeEvents } from "@kym/engine";
+import { computeState, checkInvariant, mergeEvents, listTransactions } from "@kym/engine";
 import { parseExport, fingerprint } from "./importers.mjs";
 import { readFileSync as fsRead } from "node:fs";
 
@@ -285,6 +285,45 @@ switch (cmd) {
     break;
   }
 
+  case "categorize": {
+    const doc = load();
+    const state = stateOf(doc);
+    const match = positionals()[0] || die("usage: kym categorize <payee-text> <category>");
+    const cat = findCategory(state, positionals()[1] || die("category required"));
+    const m = match.toLowerCase();
+    const hits = listTransactions(doc.events).filter(
+      (t) => t.categoryId == null && !t.splits && !t.transferId &&
+        `${t.payeeId || ""} ${t.memo || ""}`.toLowerCase().includes(m));
+    if (!hits.length) die(`no uncategorized transactions match "${match}"`);
+    const c = clockFor(doc);
+    for (const t of hits) doc.events.push(ev.txnEdit(c.send(), { txnId: t.txnId, categoryId: cat.id }));
+    save(doc);
+    console.log(`categorized ${hits.length} transaction(s) matching "${match}" -> ${cat.name}`);
+    break;
+  }
+
+  case "report": {
+    const doc = load();
+    const month = M || monthOf(new Date().toISOString());
+    const state = stateOf(doc, { asOf: month });
+    const ccy = doc.currency || DEFAULT_CURRENCY;
+    const f = (x) => formatMoney(x, ccy);
+    const rows = state.categories.map((cat) => {
+      const r = state.categoryMonths.filter((x) => x.categoryId === cat.id && x.month === month)[0];
+      return { name: cat.name, spent: r ? -Math.min(0, r.activity) : 0 };
+    }).filter((r) => r.spent > 0).sort((a, b) => b.spent - a.spent);
+    const total = rows.reduce((s, r) => s + r.spent, 0);
+    console.log(`\n  Spending — ${month}`);
+    console.log(`  ${"─".repeat(40)}`);
+    for (const r of rows) {
+      const bar = "█".repeat(Math.round((r.spent / (rows[0]?.spent || 1)) * 20));
+      console.log(`  ${r.name.padEnd(18)}${f(r.spent).padStart(13)}  ${bar}`);
+    }
+    console.log(`  ${"─".repeat(40)}`);
+    console.log(`  ${"Total".padEnd(18)}${f(total).padStart(13)}\n`);
+    break;
+  }
+
   case "log": {
     const doc = load();
     for (const e of mergeEvents(doc.events)) {
@@ -307,6 +346,8 @@ switch (cmd) {
   kym budget [--month YYYY-MM]
   kym accounts
   kym import <file.csv> --account <acct> [--format airbank|revolut] [--dry-run]
+  kym categorize <payee-text> <category>
+  kym report [--month YYYY-MM]
   kym sync <other-budget.json>
   kym log
 
