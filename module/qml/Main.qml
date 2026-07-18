@@ -233,14 +233,49 @@ Item {
                                 delegate: Rectangle {
                                     Layout.fillWidth: true
                                     implicitHeight: 34
-                                    color: rowMouse.containsMouse ? panel : "transparent"
+                                    color: rowHover.hovered ? panel : "transparent"
                                     radius: 6
+                                    HoverHandler { id: rowHover }
                                     RowLayout {
                                         anchors.fill: parent
                                         anchors.leftMargin: 10; anchors.rightMargin: 10
                                         Text { text: modelData.name; color: fg; font.pixelSize: 14 }
                                         Text { text: modelData.target || ""; color: modelData.targetOnTrack ? good : accent; font.pixelSize: 11; Layout.fillWidth: true; leftPadding: 10; verticalAlignment: Text.AlignVCenter }
-                                        Text { text: "" + modelData.assigned; color: rowMouse.containsMouse ? accent : dim; font.pixelSize: 14; Layout.preferredWidth: 110; horizontalAlignment: Text.AlignRight }
+                                        // Inline-editable ASSIGNED cell: click, type the new amount, Enter.
+                                        Item {
+                                            id: asgCell
+                                            Layout.preferredWidth: 110; implicitHeight: 28
+                                            property bool editing: false
+                                            Text {
+                                                visible: !asgCell.editing; anchors.fill: parent
+                                                text: "" + modelData.assigned
+                                                color: cellHover.hovered ? accent : dim
+                                                font.pixelSize: 14; horizontalAlignment: Text.AlignRight; verticalAlignment: Text.AlignVCenter
+                                                HoverHandler { id: cellHover }
+                                                TapHandler { onTapped: {
+                                                    asgCell.editing = true;
+                                                    asgField.text = Math.round(modelData.assignedRaw / 1000).toString();
+                                                    asgField.selectAll(); asgField.forceActiveFocus();
+                                                } }
+                                            }
+                                            TextField {
+                                                id: asgField
+                                                visible: asgCell.editing; anchors.fill: parent
+                                                color: fg; font.pixelSize: 14; horizontalAlignment: Text.AlignRight
+                                                inputMethodHints: Qt.ImhFormattedNumbersOnly
+                                                background: Rectangle { color: "#0b0d12"; border.color: accent; border.width: 1; radius: 4 }
+                                                onEditingFinished: {
+                                                    if (!asgCell.editing) return;
+                                                    asgCell.editing = false;
+                                                    var v = parseFloat(text);
+                                                    if (!isNaN(v)) {
+                                                        var delta = v - Math.round(modelData.assignedRaw / 1000);
+                                                        if (delta !== 0) run(backend.assign(modelData.name, root.month, delta.toString()), "Assigned to " + modelData.name);
+                                                    }
+                                                }
+                                                Keys.onEscapePressed: asgCell.editing = false
+                                            }
+                                        }
                                         Text { text: "" + modelData.activity; color: dim; font.pixelSize: 14; Layout.preferredWidth: 110; horizontalAlignment: Text.AlignRight }
                                         Text {
                                             // ⚠ marks overspent so it's not signalled by red alone (WCAG 1.4.1).
@@ -249,11 +284,6 @@ Item {
                                             font.pixelSize: 14; font.bold: true
                                             Layout.preferredWidth: 120; horizontalAlignment: Text.AlignRight
                                         }
-                                    }
-                                    // Click a category -> open Assign pre-filled (give every dollar a job).
-                                    MouseArea {
-                                        id: rowMouse; anchors.fill: parent; hoverEnabled: true
-                                        onClicked: { root.action = "assign"; asgCat.text = modelData.name; asgAmt.forceActiveFocus(); }
                                     }
                                 }
                             }
