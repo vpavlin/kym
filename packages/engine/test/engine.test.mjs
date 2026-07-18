@@ -148,6 +148,19 @@ test("a deleted txn is tombstoned and never resurrected", () => {
   assert.ok(checkInvariant(s).ok);
 });
 
+test("uncategorized asset activity flows to/from Ready to Assign (imported txns)", () => {
+  const h = mk("A");
+  const events = [
+    ev.accountCreate(h(), { accountId: "chk", name: "Checking", accountType: AccountType.CHECKING, startingBalance: 100000, startDate: dateIn(M) }),
+    // an imported bank expense, not yet categorized (no categoryId)
+    ev.txnCreate(h(), { txnId: "imp1", accountId: "chk", amount: -25000, date: dateIn(M), payeeId: "Albert", importId: "2026-07-15|-25000|Albert|chk" }),
+  ];
+  const s = computeState(events);
+  assert.equal(s.balances.chk, 75000);
+  assert.equal(s.readyToAssign, 75000);        // 100000 start - 25000 unassigned spend
+  assert.ok(checkInvariant(s).ok, JSON.stringify(checkInvariant(s)));
+});
+
 test("income to Ready-to-Assign inflow feeds the pool", () => {
   const h = mk("A");
   const events = [

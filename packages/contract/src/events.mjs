@@ -69,8 +69,10 @@ export const ev = {
     makeEvent(EventType.CATEGORY_EDIT, hlc, { categoryId, groupId, name, hidden }, id),
 
   // A transaction. Either `categoryId` OR `splits:[{categoryId, amount}]` (summing to amount).
-  txnCreate: (hlc, { txnId, accountId, amount, date, payeeId, categoryId, splits, cleared = "uncleared", approved = true, memo, transferId }, id) =>
-    makeEvent(EventType.TXN_CREATE, hlc, { txnId, accountId, amount, date, payeeId, categoryId, splits, cleared, approved, memo, transferId }, id),
+  // `importId` is an import-dedup fingerprint (date+amount+payee+account) for rows
+  // pulled from a bank export that lack our UUID; ignored by the fold.
+  txnCreate: (hlc, { txnId, accountId, amount, date, payeeId, categoryId, splits, cleared = "uncleared", approved = true, memo, transferId, importId }, id) =>
+    makeEvent(EventType.TXN_CREATE, hlc, { txnId, accountId, amount, date, payeeId, categoryId, splits, cleared, approved, memo, transferId, importId }, id),
 
   txnEdit: (hlc, { txnId, ...fields }, id) =>
     makeEvent(EventType.TXN_EDIT, hlc, { txnId, ...fields }, id),

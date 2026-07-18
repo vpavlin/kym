@@ -204,6 +204,11 @@ inline BudgetState computeState(const std::vector<Event>& rawEvents, std::option
     if (onCredit && legs.empty() && !r.v.transferId.empty() && r.v.amount > 0) {
       ccp[r.v.accountId] -= r.v.amount;
     }
+    // Uncategorized activity on an on-budget ASSET account flows to/from RTA
+    // (unassigned money in/out) — keeps the invariant; matches imported txns.
+    if (legs.empty() && r.v.transferId.empty() && acct.onBudget && ASSET_TYPES.count(acct.type)) {
+      income += r.v.amount;
+    }
   }
 
   // pass 3: rollover -> available, cash overspending
