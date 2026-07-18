@@ -445,6 +445,15 @@ void KymBackend::publishBudget() {
       c["activity"] = money(act, bc);
       c["available"] = money(avail, bc);
       c["negative"] = avail < 0;
+      QString tgt; bool tgtOk = true;
+      auto tit = st.targetProgress.find(cidStd);
+      if (tit != st.targetProgress.end()) {
+        tgtOk = tit->second.onTrack;
+        tgt = tgtOk ? QStringLiteral("\U0001F3AF funded")
+                    : QStringLiteral("\U0001F3AF need %1").arg(money(tit->second.needed, bc));
+      }
+      c["target"] = tgt;
+      c["targetOnTrack"] = tgtOk;
       cats.append(c);
     }
     g["categories"] = cats;

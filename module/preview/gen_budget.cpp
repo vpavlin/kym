@@ -43,6 +43,10 @@ int main() {
     e.s["txnId"] = e.id; e.s["accountId"] = acc; e.n["amount"] = amt; e.s["date"] = d;
     e.s["categoryId"] = c; ev.push_back(e);
   };
+  auto target = [&](std::string c, std::string type, Money amt) {
+    Event e; e.id = "tg" + c + std::to_string(T); e.type = "category.target"; e.hlc = h();
+    e.s["categoryId"] = c; e.s["targetType"] = type; e.n["amount"] = amt; ev.push_back(e);
+  };
   auto fb = [](Money m) { return formatMoney(m, BUDGET_CCY); };  // budget figures
 
   // A realistic Czech household month (values in CZK; Revolut in EUR, tracked off-budget).
@@ -56,6 +60,8 @@ int main() {
   assign("rent", 18000000); assign("util", 3000000); assign("groc", 8000000);
   assign("dine", 3000000); assign("fun", 2000000); assign("save", 5000000);
   txn("chk", -18000000, "rent"); txn("chk", -2450000, "groc"); txn("visa", -680000, "dine");
+  target("groc", "monthly", 8000000);      // fund 8000 Kč/mo — funded
+  target("save", "balance", 100000000);    // reach 100 000 Kč — needs more
 
   BudgetState st = computeState(ev);
   Invariant inv = checkInvariant(st);
@@ -91,9 +97,16 @@ int main() {
       if (catGroup[cid] != g) continue;
       auto [a, act] = rowFor(cid);
       Money avail = st.categoryAvailable.count(cid) ? st.categoryAvailable[cid] : 0;
+      std::string tgt = "", tgtOk = "true";
+      if (st.targetProgress.count(cid)) {
+        auto &tp = st.targetProgress[cid];
+        tgt = tp.onTrack ? "\\ud83c\\udfaf funded" : ("\\ud83c\\udfaf need " + fb(tp.needed));
+        tgtOk = tp.onTrack ? "true" : "false";
+      }
       o << (firstC ? "" : ",") << "{\"name\":\"" << catName[cid] << "\",\"assigned\":\"" << fb(a)
         << "\",\"activity\":\"" << fb(act) << "\",\"available\":\"" << fb(avail)
-        << "\",\"negative\":" << (avail < 0 ? "true" : "false") << "}";
+        << "\",\"negative\":" << (avail < 0 ? "true" : "false")
+        << ",\"target\":\"" << tgt << "\",\"targetOnTrack\":" << tgtOk << "}";
       firstC = false;
     }
     o << "]}";

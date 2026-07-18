@@ -85,7 +85,8 @@ Rectangle {
                                 RowLayout {
                                     anchors.fill: parent
                                     anchors.leftMargin: 10; anchors.rightMargin: 10
-                                    Text { text: modelData.name; color: fg; font.pixelSize: 14; Layout.fillWidth: true }
+                                    Text { text: modelData.name; color: fg; font.pixelSize: 14 }
+                                    Text { text: modelData.target || ""; color: modelData.targetOnTrack ? good : accent; font.pixelSize: 11; Layout.fillWidth: true; leftPadding: 10; verticalAlignment: Text.AlignVCenter }
                                     Text { text: "" + modelData.assigned; color: dim; font.pixelSize: 14; Layout.preferredWidth: 110; horizontalAlignment: Text.AlignRight }
                                     Text { text: "" + modelData.activity; color: dim; font.pixelSize: 14; Layout.preferredWidth: 110; horizontalAlignment: Text.AlignRight }
                                     Text {
