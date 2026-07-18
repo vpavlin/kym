@@ -17,6 +17,8 @@ string(JSON MODULE_NAME GET ${METADATA_JSON} name)
 # Universal UI module: the .rep view contract + one backend. The engine header
 # (kym_engine.hpp) is the std-only C++ port of @kym/engine, parity-tested in
 # module/test/parity.cpp.
+find_package(OpenSSL REQUIRED)
+
 logos_module(
     NAME ${MODULE_NAME}
     REP_FILE src/kym.rep
@@ -25,6 +27,12 @@ logos_module(
         src/kym_backend.cpp
         src/kym_engine.hpp
         src/money_format.hpp
+        src/kym_crypto.hpp
+        src/kym_wire.hpp
     INCLUDE_DIRS
         src
+    FIND_PACKAGES
+        OpenSSL
+    LINK_LIBRARIES
+        OpenSSL::Crypto
 )

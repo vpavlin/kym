@@ -7,6 +7,7 @@ import type { Clock, KymEvent } from "./engine";
 // Stable ids so a re-seed is deterministic and categories are referenceable.
 export const DEFAULT_ACCOUNT = "acct-checking";
 export const DEFAULT_CASH = "acct-cash";
+export const DEFAULT_REVOLUT = "acct-revolut";
 export const GROUP_EVERYDAY = "grp-everyday";
 export const GROUP_BILLS = "grp-bills";
 
@@ -26,9 +27,11 @@ export const SEED_CATEGORIES: SeedCategory[] = [
 ];
 
 /**
- * A meaningful starter budget so balances are non-trivial on first run:
- * a checking + cash account with a starting balance (income → Ready to Assign),
- * two groups, six categories, and a few assignments this month.
+ * A meaningful starter budget so balances are non-trivial on first run, using
+ * CZK-realistic amounts (the budget currency): a checking + cash account funding
+ * Ready to Assign, a EUR "Revolut" off-budget tracking account (shown in its own
+ * currency — the CZK + foreign-account model), two groups, six categories, and a
+ * few assignments this month. Money is integer milliunits (units × 1000).
  */
 export function buildSeedEvents(clock: Clock): KymEvent[] {
   const month = monthOf(Date.now());
@@ -44,8 +47,9 @@ export function buildSeedEvents(clock: Clock): KymEvent[] {
       name: "Checking",
       accountType: "checking",
       onBudget: true,
-      startingBalance: 250000, // $250.00 → Ready to Assign
+      startingBalance: 45_000_000, // 45 000 Kč (a month's salary) → Ready to Assign
       startDate: Date.now(),
+      currency: "CZK",
     })
   );
   push(
@@ -54,8 +58,22 @@ export function buildSeedEvents(clock: Clock): KymEvent[] {
       name: "Cash",
       accountType: "cash",
       onBudget: true,
-      startingBalance: 40000, // $40.00
+      startingBalance: 2_000_000, // 2 000 Kč
       startDate: Date.now(),
+      currency: "CZK",
+    })
+  );
+  // A foreign account is off-budget tracking, shown in its own currency (no
+  // in-budget FX). This makes the UI demonstrate the CZK + EUR model.
+  push(
+    ev.accountCreate(clock.send(), {
+      accountId: DEFAULT_REVOLUT,
+      name: "Revolut",
+      accountType: "tracking",
+      onBudget: false,
+      startingBalance: 500_000, // 500,00 €
+      startDate: Date.now(),
+      currency: "EUR",
     })
   );
 
@@ -63,13 +81,14 @@ export function buildSeedEvents(clock: Clock): KymEvent[] {
     push(ev.categoryCreate(clock.send(), { categoryId: c.id, groupId: c.groupId, name: c.name }));
   }
 
-  // Give some dollars a job so envelopes have Available to spend against.
+  // Give some koruna a job so envelopes have Available to spend against.
   const assigns: Array<[string, number]> = [
-    ["cat-groceries", 80000],
-    ["cat-dining", 40000],
-    ["cat-transport", 30000],
-    ["cat-fun", 20000],
-    ["cat-rent", 90000],
+    ["cat-rent", 18_000_000], // 18 000 Kč
+    ["cat-groceries", 8_000_000], // 8 000 Kč
+    ["cat-dining", 4_000_000], // 4 000 Kč
+    ["cat-utilities", 3_000_000], // 3 000 Kč
+    ["cat-transport", 3_000_000], // 3 000 Kč
+    ["cat-fun", 2_000_000], // 2 000 Kč
   ];
   for (const [categoryId, amount] of assigns) {
     push(ev.assign(clock.send(), { categoryId, month, amount, mode: "delta" }));

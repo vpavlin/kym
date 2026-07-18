@@ -27,5 +27,8 @@ export {
   monthOf,
   toMilli,
   fromMilli,
+  formatMoney,
+  CURRENCIES,
+  DEFAULT_CURRENCY,
 } from "@kym/contract";
 export type { KymEvent, HLC, Money } from "@kym/contract";

@@ -3,12 +3,15 @@
 #include <QString>
 #include <QMap>
 #include <QStringList>
+#include <QVariantList>
 #include <vector>
+#include <set>
 
 #include "rep_kym_source.h"
 #include "logos_ui_plugin_context.h"
 
 #include "kym_engine.hpp"
+#include "kym_crypto.hpp"
 
 /**
  * @brief UI backend for KYM (universal authoring model).
@@ -22,6 +25,7 @@
 class KymBackend : public KymSimpleSource, public LogosUiPluginContext {
 public:
   QString loadDemo() override;
+  QString resync() override;
   QString addAccount(QString name, QString type, QString balance) override;
   QString addCategory(QString name, QString group) override;
   QString assign(QString category, QString month, QString amount) override;
@@ -33,6 +37,7 @@ protected:
 
 private:
   std::vector<kym::Event> m_log;
+  std::set<std::string> m_eventIds;         // dedup (local + ingested)
   // id -> display name, and category id -> group id, so JSON can carry names.
   QMap<QString, QString> m_accountName, m_categoryName, m_groupName, m_categoryGroup;
   QStringList m_groupOrder;
@@ -40,9 +45,25 @@ private:
   QString m_currency = "CZK";               // the single budget currency
   qint64 m_wall = 0, m_ctr = 0;
 
+  // --- Delivery sync ---
+  QString m_dataDir;
+  bool m_nodeReady = false;
+  kym::Identity m_id;                        // household key (from the shared secret)
+  QString m_topic;                           // derived content topic
+  void bootstrap();                          // delivery node + subscribe
+  void loadOrCreateSecret();                 // household secret in the data dir
+  void sealAndSend(const kym::Event &e);     // encrypt + delivery.send one event
+  void ingestSealed(const QByteArray &sealed); // open -> decode -> merge -> refold
+  void rebuildNameMaps();                    // re-derive name maps from the log (after ingest)
+  void loadPersistedLog();
+  void savePersistedLog();
+
   kym::HLC nextHlc();
   QString currentMonth() const;
   void publishBudget();
+  // Append a locally-authored or ingested event; dedups, persists, and (if the
+  // node is up and `broadcast`) publishes it over Delivery.
+  void pushEvent(const kym::Event &e, bool broadcast);
 
   QString ensureGroup(const QString &name);
   QString addAccountEv(const QString &name, const QString &type, kym::Money bal, const QString &currency = QString());

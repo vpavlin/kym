@@ -18,10 +18,12 @@ import {
   ev,
 } from "../lib/engine";
 import type { BudgetState, Invariant, KymEvent } from "../lib/engine";
+import { AccountType, DEFAULT_CURRENCY } from "../lib/engine";
 import { getDeviceId } from "../lib/device";
 import { appendEvents, clearLog, loadLog } from "../lib/eventLog";
 import { buildSeedEvents, listTransactions } from "../lib/budget";
 import type { TxnView } from "../lib/budget";
+import { loadSettings, saveSettings } from "../lib/settings";
 
 export interface AddExpenseInput {
   amountMilli: number; // POSITIVE magnitude in milliunits; stored negated (outflow)
@@ -39,10 +41,17 @@ interface BudgetContextValue {
   state: BudgetState;
   invariant: Invariant;
   txns: TxnView[];
+  budgetCurrency: string;
+  setBudgetCurrency: (code: string) => Promise<void>;
   addExpense: (input: AddExpenseInput) => Promise<void>;
   setTxnCategory: (txnId: string, categoryId: string | null) => Promise<void>;
   setTxnCleared: (txnId: string, cleared: TxnView["cleared"]) => Promise<void>;
-  addAccount: (name: string, accountType: string, startingBalanceMilli: number) => Promise<void>;
+  addAccount: (
+    name: string,
+    accountType: string,
+    startingBalanceMilli: number,
+    currency?: string
+  ) => Promise<void>;
   addCategory: (name: string, groupId: string) => Promise<void>;
   seedDemo: () => Promise<void>;
   resetAll: () => Promise<void>;
@@ -56,23 +65,31 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
   const [ready, setReady] = useState(false);
   const [deviceId, setDeviceId] = useState("dev-loading");
   const [events, setEvents] = useState<KymEvent[]>([]);
+  const [budgetCurrency, setBudgetCurrencyState] = useState<string>(DEFAULT_CURRENCY);
   const clockRef = useRef<Clock | null>(null);
 
-  // Boot: resolve device id, build the HLC clock, load the persisted log.
+  // Boot: resolve device id, build the HLC clock, load the persisted log + settings.
   useEffect(() => {
     let alive = true;
     (async () => {
       const dev = await getDeviceId();
       const log = await loadLog();
+      const settings = await loadSettings();
       if (!alive) return;
       clockRef.current = new Clock(dev);
       setDeviceId(dev);
       setEvents(log);
+      setBudgetCurrencyState(settings.budgetCurrency);
       setReady(true);
     })();
     return () => {
       alive = false;
     };
+  }, []);
+
+  const setBudgetCurrency = useCallback(async (code: string) => {
+    setBudgetCurrencyState(code);
+    await saveSettings({ budgetCurrency: code });
   }, []);
 
   // Re-fold whenever the log changes. This is the whole point: balances are a
@@ -136,18 +153,33 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
   );
 
   const addAccount = useCallback(
-    async (name: string, accountType: string, startingBalanceMilli: number) => {
+    async (
+      name: string,
+      accountType: string,
+      startingBalanceMilli: number,
+      currency?: string
+    ) => {
+      // Foreign accounts must be off-budget tracking — one budget currency, no
+      // in-budget FX (mirrors the CLI rule in cli/kym.mjs).
+      const onBudget = accountType !== AccountType.TRACKING;
+      const ccy = (currency || budgetCurrency).toUpperCase();
+      if (onBudget && ccy !== budgetCurrency) {
+        throw new Error(
+          `on-budget accounts must be in the budget currency (${budgetCurrency}); use a tracking account for a ${ccy} account`
+        );
+      }
       const event = ev.accountCreate(clock().send(), {
         accountId: "acct-" + Math.random().toString(36).slice(2, 9),
         name,
         accountType,
-        onBudget: true,
+        onBudget,
         startingBalance: startingBalanceMilli,
         startDate: Date.now(),
+        currency: ccy,
       });
       await commit([event]);
     },
-    [commit]
+    [commit, budgetCurrency]
   );
 
   const addCategory = useCallback(
@@ -181,6 +213,8 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
     state,
     invariant,
     txns,
+    budgetCurrency,
+    setBudgetCurrency,
     addExpense,
     setTxnCategory,
     setTxnCleared,

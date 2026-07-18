@@ -5,20 +5,28 @@
 import React from "react";
 import { ScrollView, StyleSheet, Text, View } from "react-native";
 import { useBudget } from "../state/BudgetContext";
-import { fromMilli } from "../lib/engine";
+import { formatMoney } from "../lib/engine";
 import { theme } from "../ui/theme";
 
-function Amount({ milli, dim }: { milli: number; dim?: boolean }) {
+function Amount({
+  milli,
+  currency,
+  dim,
+}: {
+  milli: number;
+  currency: string;
+  dim?: boolean;
+}) {
   const color = milli > 0 ? theme.good : milli < 0 ? theme.danger : theme.textDim;
   return (
     <Text style={[styles.amt, { color: dim ? theme.textDim : color }]}>
-      {milli < 0 ? "-" : ""}${fromMilli(Math.abs(milli))}
+      {formatMoney(milli, currency)}
     </Text>
   );
 }
 
 export function BudgetScreen() {
-  const { state, invariant } = useBudget();
+  const { state, invariant, budgetCurrency } = useBudget();
   const month = state.currentMonth ?? "—";
 
   const cmByCat = new Map<string, { assigned: number; activity: number }>();
@@ -44,7 +52,7 @@ export function BudgetScreen() {
         ]}
       >
         <Text style={styles.rtaLabel}>Ready to Assign · {month}</Text>
-        <Amount milli={state.readyToAssign} />
+        <Amount milli={state.readyToAssign} currency={budgetCurrency} />
         {state.readyToAssign < 0 ? (
           <Text style={styles.rtaWarn}>Over-assigned — move money to fix.</Text>
         ) : null}
@@ -58,7 +66,7 @@ export function BudgetScreen() {
         <Text style={styles.invText}>
           {invariant.ok
             ? "Invariant holds (assets = envelopes + RTA)"
-            : `Invariant off by $${fromMilli(Math.abs(invariant.diff))} — engine bug`}
+            : `Invariant off by ${formatMoney(Math.abs(invariant.diff), budgetCurrency)} — engine bug`}
         </Text>
       </View>
 
@@ -68,9 +76,16 @@ export function BudgetScreen() {
         {state.accounts.map((a) => (
           <View key={a.id} style={styles.row}>
             <Text style={styles.rowName}>
-              {a.name} <Text style={styles.rowType}>· {a.type}</Text>
+              {a.name}{" "}
+              <Text style={styles.rowType}>
+                · {a.type}
+                {a.onBudget ? "" : " (off-budget)"}
+              </Text>
             </Text>
-            <Amount milli={state.balances[a.id] ?? 0} />
+            <Amount
+              milli={state.balances[a.id] ?? 0}
+              currency={a.currency || budgetCurrency}
+            />
           </View>
         ))}
         {state.accounts.length === 0 ? (
@@ -93,11 +108,12 @@ export function BudgetScreen() {
                     <View style={{ flex: 1 }}>
                       <Text style={styles.rowName}>{c.name}</Text>
                       <Text style={styles.catMeta}>
-                        assigned ${fromMilli(cm.assigned)} · spent ${fromMilli(Math.abs(cm.activity))}
+                        assigned {formatMoney(cm.assigned, budgetCurrency)} · spent{" "}
+                        {formatMoney(Math.abs(cm.activity), budgetCurrency)}
                       </Text>
                     </View>
                     <View style={styles.availPill}>
-                      <Amount milli={avail} />
+                      <Amount milli={avail} currency={budgetCurrency} />
                     </View>
                   </View>
                 );
@@ -116,7 +132,7 @@ export function BudgetScreen() {
                 <Text style={styles.rowName}>
                   {state.accounts.find((a) => a.id === acctId)?.name ?? acctId}
                 </Text>
-                <Amount milli={avail} />
+                <Amount milli={avail} currency={budgetCurrency} />
               </View>
             ))}
           </View>
@@ -124,8 +140,9 @@ export function BudgetScreen() {
       ) : null}
 
       <Text style={styles.footer}>
-        {state.eventCount} events folded on-device · income ${fromMilli(state.income)} · assigned $
-        {fromMilli(state.totalAssigned)}
+        {state.eventCount} events folded on-device · income{" "}
+        {formatMoney(state.income, budgetCurrency)} · assigned{" "}
+        {formatMoney(state.totalAssigned, budgetCurrency)}
       </Text>
     </ScrollView>
   );

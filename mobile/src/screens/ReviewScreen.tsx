@@ -12,18 +12,22 @@ import {
   View,
 } from "react-native";
 import { useBudget } from "../state/BudgetContext";
-import { fromMilli } from "../lib/engine";
+import { formatMoney } from "../lib/engine";
 import { theme } from "../ui/theme";
 import type { TxnView } from "../lib/budget";
 
 export function ReviewScreen() {
-  const { txns, state, setTxnCategory, setTxnCleared } = useBudget();
+  const { txns, state, setTxnCategory, setTxnCleared, budgetCurrency } = useBudget();
   const [editing, setEditing] = useState<TxnView | null>(null);
 
   const catName = (id?: string | null) =>
     id ? state.categories.find((c) => c.id === id)?.name ?? id : null;
   const acctName = (id: string) =>
     state.accounts.find((a) => a.id === id)?.name ?? id;
+  // A transaction is denominated in its account's currency (a EUR tracking
+  // account shows EUR); fall back to the budget currency.
+  const acctCurrency = (id: string) =>
+    state.accounts.find((a) => a.id === id)?.currency || budgetCurrency;
 
   // Uncategorized first (the inbox), then by date desc (already sorted in listTxns).
   const ordered = useMemo(() => {
@@ -62,7 +66,9 @@ export function ReviewScreen() {
                   {t.cleared === "cleared" ? "cleared" : "uncleared"}
                 </Text>
               </View>
-              <Text style={styles.amount}>-${fromMilli(Math.abs(t.amount))}</Text>
+              <Text style={styles.amount}>
+                {formatMoney(t.amount, acctCurrency(t.accountId))}
+              </Text>
             </Pressable>
           );
         })}
@@ -78,7 +84,10 @@ export function ReviewScreen() {
         <Pressable style={styles.backdrop} onPress={() => setEditing(null)}>
           <Pressable style={styles.sheet} onPress={() => {}}>
             <Text style={styles.sheetTitle}>
-              -${editing ? fromMilli(Math.abs(editing.amount)) : "0.00"} · pick a category
+              {editing
+                ? formatMoney(editing.amount, acctCurrency(editing.accountId))
+                : formatMoney(0, budgetCurrency)}{" "}
+              · pick a category
             </Text>
             <ScrollView style={{ maxHeight: 320 }}>
               {state.categories

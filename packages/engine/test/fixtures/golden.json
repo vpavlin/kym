@@ -1,0 +1,718 @@
+[
+  {
+    "name": "clean single-category budget",
+    "events": [
+      {
+        "v": 1,
+        "id": "cln-e0",
+        "type": "account.create",
+        "hlc": {
+          "wall": 1000000,
+          "ctr": 0,
+          "dev": "cln"
+        },
+        "dev": "cln",
+        "payload": {
+          "accountId": "chk",
+          "name": "Checking",
+          "accountType": "checking",
+          "onBudget": true,
+          "startingBalance": 100000,
+          "startDate": "2026-07-15T12:00:00Z"
+        }
+      },
+      {
+        "v": 1,
+        "id": "cln-e1",
+        "type": "group.create",
+        "hlc": {
+          "wall": 1000001,
+          "ctr": 0,
+          "dev": "cln"
+        },
+        "dev": "cln",
+        "payload": {
+          "groupId": "g1",
+          "name": "Everyday"
+        }
+      },
+      {
+        "v": 1,
+        "id": "cln-e2",
+        "type": "category.create",
+        "hlc": {
+          "wall": 1000002,
+          "ctr": 0,
+          "dev": "cln"
+        },
+        "dev": "cln",
+        "payload": {
+          "categoryId": "groc",
+          "groupId": "g1",
+          "name": "Groceries"
+        }
+      },
+      {
+        "v": 1,
+        "id": "cln-e3",
+        "type": "assign",
+        "hlc": {
+          "wall": 1000003,
+          "ctr": 0,
+          "dev": "cln"
+        },
+        "dev": "cln",
+        "payload": {
+          "categoryId": "groc",
+          "month": "2026-07",
+          "amount": 30000,
+          "mode": "delta"
+        }
+      },
+      {
+        "v": 1,
+        "id": "cln-e4",
+        "type": "txn.create",
+        "hlc": {
+          "wall": 1000004,
+          "ctr": 0,
+          "dev": "cln"
+        },
+        "dev": "cln",
+        "payload": {
+          "txnId": "t1",
+          "accountId": "chk",
+          "amount": -25000,
+          "date": "2026-07-15T12:00:00Z",
+          "categoryId": "groc",
+          "cleared": "uncleared",
+          "approved": true
+        }
+      }
+    ],
+    "expect": {
+      "balances": {
+        "chk": 75000
+      },
+      "categoryAvailable": {
+        "groc": 5000
+      },
+      "readyToAssign": 70000,
+      "invariantOk": true
+    }
+  },
+  {
+    "name": "two-device convergence (data-model.md §9)",
+    "events": [
+      {
+        "v": 1,
+        "id": "seed-e0",
+        "type": "account.create",
+        "hlc": {
+          "wall": 1000000,
+          "ctr": 0,
+          "dev": "seed"
+        },
+        "dev": "seed",
+        "payload": {
+          "accountId": "chk",
+          "name": "Checking",
+          "accountType": "checking",
+          "onBudget": true,
+          "startingBalance": 100000,
+          "startDate": "2026-07-15T12:00:00Z"
+        }
+      },
+      {
+        "v": 1,
+        "id": "seed-e1",
+        "type": "group.create",
+        "hlc": {
+          "wall": 1000001,
+          "ctr": 0,
+          "dev": "seed"
+        },
+        "dev": "seed",
+        "payload": {
+          "groupId": "g1",
+          "name": "Everyday"
+        }
+      },
+      {
+        "v": 1,
+        "id": "seed-e2",
+        "type": "category.create",
+        "hlc": {
+          "wall": 1000002,
+          "ctr": 0,
+          "dev": "seed"
+        },
+        "dev": "seed",
+        "payload": {
+          "categoryId": "groc",
+          "groupId": "g1",
+          "name": "Groceries"
+        }
+      },
+      {
+        "v": 1,
+        "id": "seed-e3",
+        "type": "category.create",
+        "hlc": {
+          "wall": 1000003,
+          "ctr": 0,
+          "dev": "seed"
+        },
+        "dev": "seed",
+        "payload": {
+          "categoryId": "dine",
+          "groupId": "g1",
+          "name": "Dining"
+        }
+      },
+      {
+        "v": 1,
+        "id": "A-e0",
+        "type": "assign",
+        "hlc": {
+          "wall": 2000004,
+          "ctr": 0,
+          "dev": "A"
+        },
+        "dev": "A",
+        "payload": {
+          "categoryId": "groc",
+          "month": "2026-07",
+          "amount": 60000,
+          "mode": "delta"
+        }
+      },
+      {
+        "v": 1,
+        "id": "A-e1",
+        "type": "txn.create",
+        "hlc": {
+          "wall": 2000005,
+          "ctr": 0,
+          "dev": "A"
+        },
+        "dev": "A",
+        "payload": {
+          "txnId": "A1",
+          "accountId": "chk",
+          "amount": -25000,
+          "date": "2026-07-15T12:00:00Z",
+          "categoryId": "groc",
+          "cleared": "uncleared",
+          "approved": true
+        }
+      },
+      {
+        "v": 1,
+        "id": "B-e0",
+        "type": "assign",
+        "hlc": {
+          "wall": 3000004,
+          "ctr": 0,
+          "dev": "B"
+        },
+        "dev": "B",
+        "payload": {
+          "categoryId": "dine",
+          "month": "2026-07",
+          "amount": 40000,
+          "mode": "delta"
+        }
+      },
+      {
+        "v": 1,
+        "id": "B-e1",
+        "type": "txn.create",
+        "hlc": {
+          "wall": 3000005,
+          "ctr": 0,
+          "dev": "B"
+        },
+        "dev": "B",
+        "payload": {
+          "txnId": "B1",
+          "accountId": "chk",
+          "amount": -30000,
+          "date": "2026-07-15T12:00:00Z",
+          "categoryId": "dine",
+          "cleared": "uncleared",
+          "approved": true
+        }
+      },
+      {
+        "v": 1,
+        "id": "B-e2",
+        "type": "move",
+        "hlc": {
+          "wall": 3000006,
+          "ctr": 0,
+          "dev": "B"
+        },
+        "dev": "B",
+        "payload": {
+          "fromCategoryId": "groc",
+          "toCategoryId": "dine",
+          "month": "2026-07",
+          "amount": 10000
+        }
+      }
+    ],
+    "expect": {
+      "balances": {
+        "chk": 45000
+      },
+      "categoryAvailable": {
+        "groc": 25000,
+        "dine": 20000
+      },
+      "readyToAssign": 0,
+      "invariantOk": true
+    }
+  },
+  {
+    "name": "funded credit-card purchase relocates into ccp payment category",
+    "events": [
+      {
+        "v": 1,
+        "id": "cc-e0",
+        "type": "account.create",
+        "hlc": {
+          "wall": 1000000,
+          "ctr": 0,
+          "dev": "cc"
+        },
+        "dev": "cc",
+        "payload": {
+          "accountId": "chk",
+          "name": "Checking",
+          "accountType": "checking",
+          "onBudget": true,
+          "startingBalance": 100000,
+          "startDate": "2026-07-15T12:00:00Z"
+        }
+      },
+      {
+        "v": 1,
+        "id": "cc-e1",
+        "type": "account.create",
+        "hlc": {
+          "wall": 1000001,
+          "ctr": 0,
+          "dev": "cc"
+        },
+        "dev": "cc",
+        "payload": {
+          "accountId": "visa",
+          "name": "Visa",
+          "accountType": "creditCard",
+          "onBudget": true,
+          "startingBalance": 0,
+          "startDate": "2026-07-15T12:00:00Z"
+        }
+      },
+      {
+        "v": 1,
+        "id": "cc-e2",
+        "type": "group.create",
+        "hlc": {
+          "wall": 1000002,
+          "ctr": 0,
+          "dev": "cc"
+        },
+        "dev": "cc",
+        "payload": {
+          "groupId": "g1",
+          "name": "Everyday"
+        }
+      },
+      {
+        "v": 1,
+        "id": "cc-e3",
+        "type": "category.create",
+        "hlc": {
+          "wall": 1000003,
+          "ctr": 0,
+          "dev": "cc"
+        },
+        "dev": "cc",
+        "payload": {
+          "categoryId": "groc",
+          "groupId": "g1",
+          "name": "Groceries"
+        }
+      },
+      {
+        "v": 1,
+        "id": "cc-e4",
+        "type": "assign",
+        "hlc": {
+          "wall": 1000004,
+          "ctr": 0,
+          "dev": "cc"
+        },
+        "dev": "cc",
+        "payload": {
+          "categoryId": "groc",
+          "month": "2026-07",
+          "amount": 30000,
+          "mode": "delta"
+        }
+      },
+      {
+        "v": 1,
+        "id": "cc-e5",
+        "type": "txn.create",
+        "hlc": {
+          "wall": 1000005,
+          "ctr": 0,
+          "dev": "cc"
+        },
+        "dev": "cc",
+        "payload": {
+          "txnId": "t1",
+          "accountId": "visa",
+          "amount": -25000,
+          "date": "2026-07-15T12:00:00Z",
+          "categoryId": "groc",
+          "cleared": "uncleared",
+          "approved": true
+        }
+      }
+    ],
+    "expect": {
+      "balances": {
+        "chk": 100000,
+        "visa": -25000
+      },
+      "categoryAvailable": {
+        "groc": 5000
+      },
+      "readyToAssign": 70000,
+      "invariantOk": true,
+      "creditCardPayments": {
+        "visa": 25000
+      }
+    }
+  },
+  {
+    "name": "split transaction fans out to two categories",
+    "events": [
+      {
+        "v": 1,
+        "id": "spl-e0",
+        "type": "account.create",
+        "hlc": {
+          "wall": 1000000,
+          "ctr": 0,
+          "dev": "spl"
+        },
+        "dev": "spl",
+        "payload": {
+          "accountId": "chk",
+          "name": "Checking",
+          "accountType": "checking",
+          "onBudget": true,
+          "startingBalance": 100000,
+          "startDate": "2026-07-15T12:00:00Z"
+        }
+      },
+      {
+        "v": 1,
+        "id": "spl-e1",
+        "type": "group.create",
+        "hlc": {
+          "wall": 1000001,
+          "ctr": 0,
+          "dev": "spl"
+        },
+        "dev": "spl",
+        "payload": {
+          "groupId": "g1",
+          "name": "Everyday"
+        }
+      },
+      {
+        "v": 1,
+        "id": "spl-e2",
+        "type": "category.create",
+        "hlc": {
+          "wall": 1000002,
+          "ctr": 0,
+          "dev": "spl"
+        },
+        "dev": "spl",
+        "payload": {
+          "categoryId": "groc",
+          "groupId": "g1",
+          "name": "Groceries"
+        }
+      },
+      {
+        "v": 1,
+        "id": "spl-e3",
+        "type": "category.create",
+        "hlc": {
+          "wall": 1000003,
+          "ctr": 0,
+          "dev": "spl"
+        },
+        "dev": "spl",
+        "payload": {
+          "categoryId": "home",
+          "groupId": "g1",
+          "name": "Household"
+        }
+      },
+      {
+        "v": 1,
+        "id": "spl-e4",
+        "type": "assign",
+        "hlc": {
+          "wall": 1000004,
+          "ctr": 0,
+          "dev": "spl"
+        },
+        "dev": "spl",
+        "payload": {
+          "categoryId": "groc",
+          "month": "2026-07",
+          "amount": 40000,
+          "mode": "delta"
+        }
+      },
+      {
+        "v": 1,
+        "id": "spl-e5",
+        "type": "assign",
+        "hlc": {
+          "wall": 1000005,
+          "ctr": 0,
+          "dev": "spl"
+        },
+        "dev": "spl",
+        "payload": {
+          "categoryId": "home",
+          "month": "2026-07",
+          "amount": 40000,
+          "mode": "delta"
+        }
+      },
+      {
+        "v": 1,
+        "id": "spl-e6",
+        "type": "txn.create",
+        "hlc": {
+          "wall": 1000006,
+          "ctr": 0,
+          "dev": "spl"
+        },
+        "dev": "spl",
+        "payload": {
+          "txnId": "t1",
+          "accountId": "chk",
+          "amount": -30000,
+          "date": "2026-07-15T12:00:00Z",
+          "splits": [
+            {
+              "categoryId": "groc",
+              "amount": -18000
+            },
+            {
+              "categoryId": "home",
+              "amount": -12000
+            }
+          ],
+          "cleared": "uncleared",
+          "approved": true
+        }
+      }
+    ],
+    "expect": {
+      "balances": {
+        "chk": 70000
+      },
+      "categoryAvailable": {
+        "groc": 22000,
+        "home": 28000
+      },
+      "readyToAssign": 20000,
+      "invariantOk": true
+    }
+  },
+  {
+    "name": "cash overspend rolls off to next month RTA",
+    "events": [
+      {
+        "v": 1,
+        "id": "ovr-e0",
+        "type": "account.create",
+        "hlc": {
+          "wall": 1000000,
+          "ctr": 0,
+          "dev": "ovr"
+        },
+        "dev": "ovr",
+        "payload": {
+          "accountId": "chk",
+          "name": "Checking",
+          "accountType": "checking",
+          "onBudget": true,
+          "startingBalance": 100000,
+          "startDate": "2026-07-15T12:00:00Z"
+        }
+      },
+      {
+        "v": 1,
+        "id": "ovr-e1",
+        "type": "group.create",
+        "hlc": {
+          "wall": 1000001,
+          "ctr": 0,
+          "dev": "ovr"
+        },
+        "dev": "ovr",
+        "payload": {
+          "groupId": "g1",
+          "name": "Everyday"
+        }
+      },
+      {
+        "v": 1,
+        "id": "ovr-e2",
+        "type": "category.create",
+        "hlc": {
+          "wall": 1000002,
+          "ctr": 0,
+          "dev": "ovr"
+        },
+        "dev": "ovr",
+        "payload": {
+          "categoryId": "groc",
+          "groupId": "g1",
+          "name": "Groceries"
+        }
+      },
+      {
+        "v": 1,
+        "id": "ovr-e3",
+        "type": "assign",
+        "hlc": {
+          "wall": 1000003,
+          "ctr": 0,
+          "dev": "ovr"
+        },
+        "dev": "ovr",
+        "payload": {
+          "categoryId": "groc",
+          "month": "2026-07",
+          "amount": 20000,
+          "mode": "delta"
+        }
+      },
+      {
+        "v": 1,
+        "id": "ovr-e4",
+        "type": "txn.create",
+        "hlc": {
+          "wall": 1000004,
+          "ctr": 0,
+          "dev": "ovr"
+        },
+        "dev": "ovr",
+        "payload": {
+          "txnId": "t1",
+          "accountId": "chk",
+          "amount": -45000,
+          "date": "2026-07-15T12:00:00Z",
+          "categoryId": "groc",
+          "cleared": "uncleared",
+          "approved": true
+        }
+      },
+      {
+        "v": 1,
+        "id": "ovr-e5",
+        "type": "assign",
+        "hlc": {
+          "wall": 1000005,
+          "ctr": 0,
+          "dev": "ovr"
+        },
+        "dev": "ovr",
+        "payload": {
+          "categoryId": "groc",
+          "month": "2026-08",
+          "amount": 0,
+          "mode": "delta"
+        }
+      }
+    ],
+    "expect": {
+      "balances": {
+        "chk": 55000
+      },
+      "categoryAvailable": {
+        "groc": 0
+      },
+      "readyToAssign": 55000,
+      "invariantOk": true
+    }
+  },
+  {
+    "name": "income to rta-inflow feeds Ready to Assign",
+    "events": [
+      {
+        "v": 1,
+        "id": "inc-e0",
+        "type": "account.create",
+        "hlc": {
+          "wall": 1000000,
+          "ctr": 0,
+          "dev": "inc"
+        },
+        "dev": "inc",
+        "payload": {
+          "accountId": "chk",
+          "name": "Checking",
+          "accountType": "checking",
+          "onBudget": true,
+          "startingBalance": 0,
+          "startDate": "2026-07-15T12:00:00Z"
+        }
+      },
+      {
+        "v": 1,
+        "id": "inc-e1",
+        "type": "txn.create",
+        "hlc": {
+          "wall": 1000001,
+          "ctr": 0,
+          "dev": "inc"
+        },
+        "dev": "inc",
+        "payload": {
+          "txnId": "pay",
+          "accountId": "chk",
+          "amount": 500000,
+          "date": "2026-07-15T12:00:00Z",
+          "categoryId": "rta-inflow",
+          "cleared": "uncleared",
+          "approved": true
+        }
+      }
+    ],
+    "expect": {
+      "balances": {
+        "chk": 500000
+      },
+      "categoryAvailable": {},
+      "readyToAssign": 500000,
+      "invariantOk": true
+    }
+  }
+]

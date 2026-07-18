@@ -11,14 +11,14 @@ import {
   View,
 } from "react-native";
 import { useBudget } from "../state/BudgetContext";
-import { fromMilli } from "../lib/engine";
+import { formatMoney } from "../lib/engine";
 import { DEFAULT_ACCOUNT } from "../lib/budget";
 import { theme } from "../ui/theme";
 
 const KEYS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "clr", "0", "del"];
 
 export function CaptureScreen({ goSetup }: { goSetup: () => void }) {
-  const { state, addExpense } = useBudget();
+  const { state, addExpense, budgetCurrency } = useBudget();
   const [cents, setCents] = useState(0); // ATM-style entry: digits shift in from the right
   const [accountId, setAccountId] = useState<string | null>(null);
   const [categoryId, setCategoryId] = useState<string | null>(null);
@@ -34,7 +34,14 @@ export function CaptureScreen({ goSetup }: { goSetup: () => void }) {
     (accounts.find((a) => a.id === DEFAULT_ACCOUNT)?.id ?? accounts[0]?.id ?? null);
 
   const amountMilli = cents * 10; // 1 cent = 10 milliunits
-  const display = useMemo(() => fromMilli(amountMilli), [amountMilli]);
+  // The capture is denominated in the chosen account's currency (a EUR tracking
+  // account captures in EUR); fall back to the budget currency.
+  const activeCurrency =
+    accounts.find((a) => a.id === activeAccount)?.currency || budgetCurrency;
+  const display = useMemo(
+    () => formatMoney(amountMilli, activeCurrency),
+    [amountMilli, activeCurrency]
+  );
 
   const press = (k: string) => {
     if (k === "del") setCents((c) => Math.floor(c / 10));
@@ -54,7 +61,7 @@ export function CaptureScreen({ goSetup }: { goSetup: () => void }) {
     });
     const acctName = accounts.find((a) => a.id === activeAccount)?.name ?? "account";
     const catName = categories.find((c) => c.id === categoryId)?.name ?? "Uncategorized";
-    setFlash(`Saved ${fromMilli(amountMilli)} · ${catName} · ${acctName}`);
+    setFlash(`Saved ${formatMoney(amountMilli, activeCurrency)} · ${catName} · ${acctName}`);
     setCents(0);
     setCategoryId(null);
     setCleared(false);
@@ -77,9 +84,8 @@ export function CaptureScreen({ goSetup }: { goSetup: () => void }) {
 
   return (
     <View style={styles.root}>
-      {/* Amount — the hero. */}
+      {/* Amount — the hero (formatted in the active account's currency). */}
       <View style={styles.amountWrap}>
-        <Text style={styles.currency}>$</Text>
         <Text style={styles.amount} numberOfLines={1} adjustsFontSizeToFit>
           {display}
         </Text>

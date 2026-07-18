@@ -12,24 +12,36 @@ import {
   View,
 } from "react-native";
 import { useBudget } from "../state/BudgetContext";
-import { fromMilli, toMilli } from "../lib/engine";
+import { formatMoney, toMilli, CURRENCIES } from "../lib/engine";
 import { GROUP_EVERYDAY } from "../lib/budget";
 import { theme } from "../ui/theme";
 
-const ACCOUNT_TYPES = ["checking", "savings", "cash", "creditCard"];
+const ACCOUNT_TYPES = ["checking", "savings", "cash", "creditCard", "tracking"];
+const CURRENCY_CODES = Object.keys(CURRENCIES);
 
 export function SetupScreen() {
-  const { state, seedDemo, resetAll, addAccount, addCategory, events } = useBudget();
+  const {
+    state,
+    seedDemo,
+    resetAll,
+    addAccount,
+    addCategory,
+    events,
+    budgetCurrency,
+    setBudgetCurrency,
+  } = useBudget();
 
   const [acctName, setAcctName] = useState("");
   const [acctType, setAcctType] = useState("checking");
   const [acctStart, setAcctStart] = useState("");
+  const [acctCurrency, setAcctCurrency] = useState(budgetCurrency);
 
   const [catName, setCatName] = useState("");
   const [catGroup, setCatGroup] = useState<string>(GROUP_EVERYDAY);
 
   const groups = state.groups;
   const alreadySeeded = state.accounts.length > 0;
+  const hasAccounts = state.accounts.length > 0;
 
   return (
     <ScrollView style={styles.root} contentContainerStyle={{ paddingBottom: 40 }}>
@@ -45,9 +57,40 @@ export function SetupScreen() {
         </Text>
       </Pressable>
       <Text style={styles.note}>
-        Adds a Checking + Cash account ($290 total), two groups, six categories, and this
-        month's assignments — so Ready to Assign and envelopes are meaningful immediately.
+        Adds a Checking + Cash account (47 000 Kč on-budget) plus a EUR Revolut tracking
+        account (500,00 €), two groups, six categories, and this month's assignments — so
+        Ready to Assign and envelopes are meaningful immediately, in the CZK + foreign model.
       </Text>
+
+      {/* Budget currency — the single currency envelopes and Ready to Assign are in. */}
+      <Text style={styles.section}>Budget currency</Text>
+      <View style={styles.card}>
+        <View style={styles.chipRow}>
+          {CURRENCY_CODES.map((code) => (
+            <Pressable
+              key={code}
+              disabled={hasAccounts}
+              style={[
+                styles.chip,
+                budgetCurrency === code && styles.chipActive,
+                hasAccounts && budgetCurrency !== code && styles.chipDisabled,
+              ]}
+              onPress={() => setBudgetCurrency(code)}
+            >
+              <Text
+                style={[styles.chipText, budgetCurrency === code && styles.chipTextActive]}
+              >
+                {code}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+        <Text style={styles.note}>
+          {hasAccounts
+            ? `Locked to ${budgetCurrency} while accounts exist. Reset to change it. Foreign money lives in off-budget tracking accounts.`
+            : "One currency for the whole budget (default CZK). Foreign money lives in off-budget tracking accounts."}
+        </Text>
+      </View>
 
       {/* Add account. */}
       <Text style={styles.section}>Add account</Text>
@@ -70,6 +113,19 @@ export function SetupScreen() {
             </Pressable>
           ))}
         </View>
+        <View style={styles.chipRow}>
+          {CURRENCY_CODES.map((code) => (
+            <Pressable
+              key={code}
+              style={[styles.chip, acctCurrency === code && styles.chipActive]}
+              onPress={() => setAcctCurrency(code)}
+            >
+              <Text style={[styles.chipText, acctCurrency === code && styles.chipTextActive]}>
+                {code}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
         <TextInput
           style={styles.input}
           placeholder="Starting balance (e.g. 250.00)"
@@ -78,13 +134,27 @@ export function SetupScreen() {
           value={acctStart}
           onChangeText={setAcctStart}
         />
+        <Text style={styles.note}>
+          On-budget accounts must be in {budgetCurrency}. For a foreign-currency account,
+          pick type "tracking" (off-budget, shown in its own currency).
+        </Text>
         <Pressable
           style={styles.secondary}
           onPress={async () => {
             if (!acctName.trim()) return Alert.alert("Name required");
-            await addAccount(acctName.trim(), acctType, toMilli(acctStart || "0"));
+            try {
+              await addAccount(
+                acctName.trim(),
+                acctType,
+                toMilli(acctStart || "0"),
+                acctCurrency
+              );
+            } catch (e: any) {
+              return Alert.alert("Can't add account", e?.message ?? String(e));
+            }
             setAcctName("");
             setAcctStart("");
+            setAcctCurrency(budgetCurrency);
           }}
         >
           <Text style={styles.secondaryText}>Add account</Text>

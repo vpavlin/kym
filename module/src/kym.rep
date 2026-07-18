@@ -11,6 +11,10 @@ class Kym
     // True once the backend has folded an initial budget.
     PROP(bool ready=false READONLY)
 
+    // 3-word pairing fingerprint (pgp words) of the household secret — shown so
+    // devices can confirm they share the same key. NOT the secret/topic.
+    PROP(QString fingerprint="" READONLY)
+
     // The folded BudgetState as JSON — the whole view renders off this:
     // { currentMonth, readyToAssign, invariant:{ok,assets,categoriesAvail},
     //   accounts:[{id,name,type,onBudget,balance}],
@@ -20,6 +24,10 @@ class Kym
 
     // Seed a realistic sample budget (accounts, categories, income, spending).
     SLOT(QString loadDemo())
+
+    // Re-broadcast the whole local event log over Delivery — backfill for a peer
+    // (phone / another Basecamp) that just joined and missed live events.
+    SLOT(QString resync())
 
     // Open an account. type ∈ checking|savings|cash|creditCard|lineOfCredit|tracking.
     SLOT(QString addAccount(QString name, QString type, QString balance))

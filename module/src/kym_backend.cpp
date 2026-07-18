@@ -1,8 +1,15 @@
 #include "kym_backend.h"
 #include "money_format.hpp"
+#include "kym_wire.hpp"
+#include "pgp_words.h"
 
 #include <QDate>
 #include <QDateTime>
+#include <QDir>
+#include <QFile>
+#include <QSaveFile>
+#include <QStandardPaths>
+#include <QTimer>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -10,6 +17,11 @@
 #include <QRegularExpression>
 #include <QPair>
 #include <cmath>
+
+#include <openssl/rand.h>
+#include <openssl/sha.h>
+
+#include "logos_sdk.h"
 
 // --- small helpers ---------------------------------------------------------
 
@@ -64,7 +76,7 @@ QString KymBackend::ensureGroup(const QString &name) {
   auto e = baseEvent("group.create", nextHlc());
   e.s["groupId"] = gid.toStdString();
   e.s["name"] = name.toStdString();
-  m_log.push_back(e);
+  pushEvent(e, true);
   m_groupName[gid] = name;
   m_groupOrder << gid;
   return gid;
@@ -81,7 +93,7 @@ QString KymBackend::addAccountEv(const QString &name, const QString &type, kym::
   e.s["currency"] = ccy.toStdString();
   e.n["startingBalance"] = bal;
   e.b["onBudget"] = (type != "tracking");
-  m_log.push_back(e);
+  pushEvent(e, true);
   m_accountName[id] = name;
   m_accountCurrency[id] = ccy;
   return id;
@@ -94,7 +106,7 @@ QString KymBackend::addCategoryEv(const QString &name, const QString &group) {
   e.s["categoryId"] = id.toStdString();
   e.s["groupId"] = gid.toStdString();
   e.s["name"] = name.toStdString();
-  m_log.push_back(e);
+  pushEvent(e, true);
   m_categoryName[id] = name;
   m_categoryGroup[id] = gid;
   return id;
@@ -106,7 +118,7 @@ void KymBackend::assignEv(const QString &catId, const QString &month, kym::Money
   e.s["month"] = month.toStdString();
   e.s["mode"] = "delta";
   e.n["amount"] = amt;
-  m_log.push_back(e);
+  pushEvent(e, true);
 }
 
 void KymBackend::moveEv(const QString &fromId, const QString &toId, const QString &month, kym::Money amt) {
@@ -115,7 +127,7 @@ void KymBackend::moveEv(const QString &fromId, const QString &toId, const QStrin
   e.s["toCategoryId"] = toId.toStdString();
   e.s["month"] = month.toStdString();
   e.n["amount"] = amt;
-  m_log.push_back(e);
+  pushEvent(e, true);
 }
 
 void KymBackend::txnEv(const QString &acctId, kym::Money amt, const QString &month, const QString &catId) {
@@ -125,7 +137,7 @@ void KymBackend::txnEv(const QString &acctId, kym::Money amt, const QString &mon
   e.n["amount"] = amt;
   e.s["date"] = (month + "-15T12:00:00Z").toStdString();
   e.s["categoryId"] = catId.toStdString();
-  m_log.push_back(e);
+  pushEvent(e, true);
 }
 
 QString KymBackend::findAccountId(const QString &name) const {
@@ -210,14 +222,172 @@ QString KymBackend::loadDemo() {
 
 // --- bootstrap + publish ----------------------------------------------------
 
+QString KymBackend::resync() {
+  if (!m_nodeReady) return "node not ready";
+  for (const auto &e : m_log) sealAndSend(e);
+  return "";
+}
+
 void KymBackend::onContextReady() {
-  setStatus("KYM ready");
-  if (m_log.empty()) loadDemo();
-  setReady(true);
+  setStatus("Starting…");
+  loadOrCreateSecret();       // household key -> m_id, m_topic, fingerprint
+  loadPersistedLog();         // durable local copy (this instance is a hub)
+  // Seed a demo only for a truly fresh, solo budget. A paired peer sets
+  // KYM_NO_DEMO=1 so two instances don't seed divergent demo ids.
+  if (m_log.empty() && !qEnvironmentVariableIsSet("KYM_NO_DEMO")) loadDemo();
+  // Defer the delivery bootstrap off the context-ready callback (Perun gotcha).
+  QTimer::singleShot(0, [this]() {
+    bootstrap();
+    setReady(true);
+    publishBudget();
+  });
+}
+
+// ---- Delivery sync ---------------------------------------------------------
+
+void KymBackend::pushEvent(const kym::Event &e, bool broadcast) {
+  if (m_eventIds.count(e.id)) return;        // idempotent (dedup by UUID)
+  m_log.push_back(e);
+  m_eventIds.insert(e.id);
+  savePersistedLog();
+  if (broadcast && m_nodeReady) sealAndSend(e);
+}
+
+void KymBackend::sealAndSend(const kym::Event &e) {
+  QByteArray env = kym::encodeEventEnvelope(e);
+  kym::Bytes nonce(12);
+  RAND_bytes(nonce.data(), 12);
+  kym::Bytes sealed = kym::seal(m_id, kym::Bytes(env.begin(), env.end()), m_topic.toStdString(), nonce);
+  QByteArray payload(reinterpret_cast<const char *>(sealed.data()), (int)sealed.size());
+  modules().delivery_module.send(m_topic, payload);
+}
+
+void KymBackend::ingestSealed(const QByteArray &sealed) {
+  kym::Bytes s(sealed.begin(), sealed.end());
+  kym::Bytes pt;
+  try {
+    pt = kym::open(m_id, s, m_topic.toStdString());  // not ours / tampered -> throws
+  } catch (...) {
+    return;
+  }
+  QByteArray bytes(reinterpret_cast<const char *>(pt.data()), (int)pt.size());
+  kym::Event e;
+  if (!kym::decodeEventEnvelope(bytes, e)) return;
+  if (m_eventIds.count(e.id)) return;        // already have it (Store replay)
+  pushEvent(e, /*broadcast=*/false);         // ingested — never re-broadcast
   publishBudget();
 }
 
+void KymBackend::bootstrap() {
+  modules().delivery_module.on("messageReceived", [this](const QVariantList &data) {
+    if (data.size() < 3) return;
+    ingestSealed(data.at(2).toByteArray());
+  });
+  modules().delivery_module.on("connectionStateChanged", [this](const QVariantList &data) {
+    if (!data.isEmpty() && m_nodeReady) setStatus(data.at(0).toString());
+  });
+
+  const QJsonObject cfg{{"logLevel", "INFO"}, {"mode", "Core"}, {"preset", "logos.dev"}};
+  const QString cfgJson = QString::fromUtf8(QJsonDocument(cfg).toJson(QJsonDocument::Compact));
+  LogosResult created = modules().delivery_module.createNode(cfgJson);
+  if (created.success) modules().delivery_module.start();     // may already be running
+  modules().delivery_module.subscribe(m_topic);
+  m_nodeReady = true;
+  setStatus(QStringLiteral("Connected · paired"));
+}
+
+void KymBackend::loadOrCreateSecret() {
+  m_dataDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/kym";
+  QDir().mkpath(m_dataDir);
+
+  kym::Bytes secret;
+  const QByteArray envHex = qgetenv("KYM_HOUSEHOLD_SECRET");   // test override: shared key
+  if (envHex.size() >= 64) {
+    secret = kym::fromHex(QString::fromLatin1(envHex.left(64)).toStdString());
+  } else {
+    const QString path = m_dataDir + "/pair.key";
+    QFile f(path);
+    if (f.open(QIODevice::ReadOnly)) {
+      const QByteArray raw = f.read(32);
+      f.close();
+      if (raw.size() == 32) secret = kym::Bytes(raw.begin(), raw.end());
+    }
+    if (secret.size() != 32) {
+      secret.resize(32);
+      RAND_bytes(secret.data(), 32);
+      QSaveFile out(path);
+      if (out.open(QIODevice::WriteOnly)) {
+        out.write(QByteArray(reinterpret_cast<const char *>(secret.data()), 32));
+        out.commit();
+        QFile::setPermissions(path, QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+      }
+    }
+  }
+  m_id = kym::deriveIdentity(secret);
+  m_topic = QString::fromStdString(kym::topicFor(m_id));
+  unsigned char h[32];
+  SHA256(m_id.K.data(), m_id.K.size(), h);
+  setFingerprint(QStringLiteral("%1 %2 %3").arg(kPgpEven[h[0]]).arg(kPgpOdd[h[1]]).arg(kPgpEven[h[2]]));
+}
+
+void KymBackend::savePersistedLog() {
+  if (m_dataDir.isEmpty()) return;
+  QJsonArray arr;
+  for (const auto &e : m_log) arr.append(kym::eventToJson(e));
+  QSaveFile f(m_dataDir + "/log.json");
+  if (f.open(QIODevice::WriteOnly)) {
+    f.write(QJsonDocument(arr).toJson(QJsonDocument::Compact));
+    f.commit();
+  }
+}
+
+void KymBackend::loadPersistedLog() {
+  QFile f(m_dataDir + "/log.json");
+  if (!f.open(QIODevice::ReadOnly)) return;
+  const QJsonDocument doc = QJsonDocument::fromJson(f.readAll());
+  f.close();
+  if (!doc.isArray()) return;
+  for (const auto &v : doc.array()) {
+    kym::Event e = kym::eventFromJson(v.toObject());
+    if (!m_eventIds.count(e.id)) { m_log.push_back(e); m_eventIds.insert(e.id); }
+  }
+}
+
+// Re-derive display name maps from the log so INGESTED accounts/categories (not
+// created by our own builders) also render with their names.
+void KymBackend::rebuildNameMaps() {
+  auto sv = [](const kym::Event &e, const char *k) -> QString {
+    auto it = e.s.find(k);
+    return it == e.s.end() ? QString() : QString::fromStdString(it->second);
+  };
+  m_accountName.clear(); m_categoryName.clear(); m_groupName.clear();
+  m_categoryGroup.clear(); m_accountCurrency.clear(); m_groupOrder.clear();
+  for (const auto &e : kym::mergeEvents(m_log)) {
+    if (e.type == "group.create") {
+      QString id = sv(e, "groupId");
+      if (!m_groupName.contains(id)) { m_groupName[id] = sv(e, "name"); m_groupOrder << id; }
+    } else if (e.type == "account.create") {
+      QString id = sv(e, "accountId");
+      m_accountName[id] = sv(e, "name");
+      QString c = sv(e, "currency");
+      m_accountCurrency[id] = c.isEmpty() ? m_currency : c;
+    } else if (e.type == "account.edit") {
+      QString id = sv(e, "accountId");
+      if (!sv(e, "name").isEmpty()) m_accountName[id] = sv(e, "name");
+    } else if (e.type == "category.create") {
+      QString id = sv(e, "categoryId");
+      m_categoryName[id] = sv(e, "name");
+      m_categoryGroup[id] = sv(e, "groupId");
+    } else if (e.type == "category.edit") {
+      QString id = sv(e, "categoryId");
+      if (!sv(e, "name").isEmpty()) m_categoryName[id] = sv(e, "name");
+      if (!sv(e, "groupId").isEmpty()) m_categoryGroup[id] = sv(e, "groupId");
+    }
+  }
+}
+
 void KymBackend::publishBudget() {
+  rebuildNameMaps();   // pick up names of ingested (peer-created) accounts/categories
   kym::BudgetState st = kym::computeState(m_log);
   kym::Invariant inv = kym::checkInvariant(st);
 

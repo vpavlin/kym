@@ -62,6 +62,22 @@ declare module "@kym/contract" {
   export function assertMoney(m: number, ctx?: string): Money;
   export function sumMoney(list: Money[]): Money;
 
+  export interface CurrencySpec {
+    code: string;
+    symbol: string;
+    decimals: number;
+    symbolAfter: boolean;
+    thousands: string;
+    decimal: string;
+  }
+  export const CURRENCIES: Record<string, CurrencySpec>;
+  export const DEFAULT_CURRENCY: string;
+  export function formatMoney(
+    milli: Money,
+    code?: string,
+    opts?: { sign?: boolean }
+  ): string;
+
   export function makeEvent(
     type: EventKind,
     hlc: HLC,
@@ -80,6 +96,7 @@ declare module "@kym/contract" {
         onBudget?: boolean;
         startingBalance?: Money;
         startDate?: string | number;
+        currency?: string | null;
       },
       id?: string
     ): KymEvent;
@@ -163,6 +180,7 @@ declare module "@kym/engine" {
     onBudget: boolean;
     closed: boolean;
     startingBalance: Money;
+    currency: string | null;
   }
   export interface GroupView {
     id: string;
