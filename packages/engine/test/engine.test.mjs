@@ -161,6 +161,28 @@ test("uncategorized asset activity flows to/from Ready to Assign (imported txns)
   assert.ok(checkInvariant(s).ok, JSON.stringify(checkInvariant(s)));
 });
 
+test("category targets compute funding need (monthly / balance)", () => {
+  const h = mk("A");
+  const events = [
+    ev.accountCreate(h(), { accountId: "chk", name: "Checking", accountType: AccountType.CHECKING, startingBalance: 100000, startDate: dateIn(M) }),
+    ev.categoryCreate(h(), { categoryId: "groc", groupId: "g1", name: "Groceries" }),
+    ev.categoryCreate(h(), { categoryId: "save", groupId: "g1", name: "Emergency Fund" }),
+    ev.categoryTarget(h(), { categoryId: "groc", targetType: "monthly", amount: 50000 }),   // fund 500/mo
+    ev.categoryTarget(h(), { categoryId: "save", targetType: "balance", amount: 300000 }),   // reach 3000 available
+    ev.assign(h(), { categoryId: "groc", month: M, amount: 30000 }),  // funded 300 of 500
+    ev.assign(h(), { categoryId: "save", month: M, amount: 100000 }), // available 1000 of 3000
+  ];
+  const s = computeState(events);
+  assert.equal(s.targetProgress.groc.needed, 20000);   // 500 - 300
+  assert.equal(s.targetProgress.groc.onTrack, false);
+  assert.equal(s.targetProgress.save.needed, 200000);  // 3000 - 1000
+  assert.ok(checkInvariant(s).ok);
+  // fully fund groceries -> on track
+  const s2 = computeState([...events, ev.assign(h(), { categoryId: "groc", month: M, amount: 20000 })]);
+  assert.equal(s2.targetProgress.groc.needed, 0);
+  assert.equal(s2.targetProgress.groc.onTrack, true);
+});
+
 test("income to Ready-to-Assign inflow feeds the pool", () => {
   const h = mk("A");
   const events = [

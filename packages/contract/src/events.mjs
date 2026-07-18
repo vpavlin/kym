@@ -10,6 +10,7 @@ export const EventType = {
   ACCOUNT_EDIT: "account.edit",
   CATEGORY_CREATE: "category.create",
   CATEGORY_EDIT: "category.edit",
+  CATEGORY_TARGET: "category.target",
   TXN_CREATE: "txn.create",
   TXN_EDIT: "txn.edit",
   TXN_DELETE: "txn.delete",
@@ -67,6 +68,12 @@ export const ev = {
 
   categoryEdit: (hlc, { categoryId, groupId, name, hidden }, id) =>
     makeEvent(EventType.CATEGORY_EDIT, hlc, { categoryId, groupId, name, hidden }, id),
+
+  // A funding target for a category. targetType ∈ 'monthly' (fund `amount` each
+  // month) | 'balance' (reach `amount` available) | 'balanceByDate' (reach
+  // `amount` available by `targetMonth`). amount=0 clears the target.
+  categoryTarget: (hlc, { categoryId, targetType, amount, targetMonth }, id) =>
+    makeEvent(EventType.CATEGORY_TARGET, hlc, { categoryId, targetType, amount, targetMonth }, id),
 
   // A transaction. Either `categoryId` OR `splits:[{categoryId, amount}]` (summing to amount).
   // `importId` is an import-dedup fingerprint (date+amount+payee+account) for rows

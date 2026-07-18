@@ -43,6 +43,8 @@ struct Event {
 
 struct Account { std::string id, name, type; bool onBudget; Money startingBalance; std::string currency; };
 struct CategoryMonth { std::string categoryId, month; Money assigned, activity, available; };
+struct Target { std::string type, targetMonth; Money amount; };
+struct TargetProgress { std::string type, targetMonth; Money amount, needed, funded; bool onTrack; };
 
 struct BudgetState {
   std::string currentMonth;
@@ -52,6 +54,7 @@ struct BudgetState {
   std::map<std::string, Money> balances;            // accountId -> balance
   std::vector<CategoryMonth> categoryMonths;
   std::map<std::string, Money> categoryAvailable;   // categoryId -> current available
+  std::map<std::string, TargetProgress> targetProgress; // categoryId -> funding progress
   std::map<std::string, Money> creditCardPayments;  // accountId -> ccp available
   Money income = 0, totalAssigned = 0, cashOverspending = 0, readyToAssign = 0;
   size_t eventCount = 0;
@@ -105,6 +108,7 @@ inline BudgetState computeState(const std::vector<Event>& rawEvents, std::option
   std::set<std::string> categories;
   std::vector<std::string> categoryOrder;
   std::map<std::string, Money> assigned;   // key(cat,month) -> money
+  std::map<std::string, Target> targets;   // categoryId -> target
   std::set<std::string> months;
 
   // pass 1: entities + plan layer
@@ -126,6 +130,12 @@ inline BudgetState computeState(const std::vector<Event>& rawEvents, std::option
       if (!categories.count(id)) categoryOrder.push_back(id);
       categories.insert(id);
       st.categoryGroup[id] = e.s.count("groupId") ? e.s.at("groupId") : "";
+    } else if (e.type == "category.target") {
+      const auto& cid = e.s.at("categoryId");
+      Money amt = e.n.count("amount") ? e.n.at("amount") : 0;
+      if (!amt) targets.erase(cid);
+      else targets[cid] = Target{e.s.count("targetType") ? e.s.at("targetType") : "",
+                                 e.s.count("targetMonth") ? e.s.at("targetMonth") : "", amt};
     } else if (e.type == "assign") {
       const auto k = keyOf(e.s.at("categoryId"), e.s.at("month"));
       Money amt = e.n.at("amount");
@@ -233,6 +243,28 @@ inline BudgetState computeState(const std::vector<Event>& rawEvents, std::option
       current = avail;
     }
     st.categoryAvailable[cat] = current;
+  }
+
+  // Target funding progress (mirrors engine.mjs).
+  auto monthDiff = [](const std::string &a, const std::string &b) {
+    return (std::stoi(b.substr(0, 4)) - std::stoi(a.substr(0, 4))) * 12 +
+           (std::stoi(b.substr(5, 2)) - std::stoi(a.substr(5, 2)));
+  };
+  for (const auto &kv : targets) {
+    const std::string &cid = kv.first; const Target &t = kv.second;
+    Money avail = st.categoryAvailable.count(cid) ? st.categoryAvailable[cid] : 0;
+    Money assignedThisMonth = assigned.count(keyOf(cid, currentMonth)) ? assigned[keyOf(cid, currentMonth)] : 0;
+    Money needed = 0, funded = 0;
+    if (t.type == "monthly") { funded = assignedThisMonth; needed = std::max<Money>(0, t.amount - assignedThisMonth); }
+    else if (t.type == "balance") { funded = avail; needed = std::max<Money>(0, t.amount - avail); }
+    else if (t.type == "balanceByDate" && !t.targetMonth.empty() && !currentMonth.empty()) {
+      long monthsLeft = std::max<long>(1, monthDiff(currentMonth, t.targetMonth) + 1);
+      Money remaining = std::max<Money>(0, t.amount - avail);
+      Money perMonth = (remaining + monthsLeft - 1) / monthsLeft;
+      needed = std::max<Money>(0, perMonth - std::max<Money>(0, assignedThisMonth));
+      funded = avail;
+    }
+    st.targetProgress[cid] = TargetProgress{t.type, t.targetMonth, t.amount, needed, funded, needed == 0};
   }
 
   Money totalAssigned = 0;

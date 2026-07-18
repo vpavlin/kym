@@ -24,7 +24,7 @@ import { readFileSync as fsRead } from "node:fs";
 // command is a positional. Flags may appear anywhere (before or after the command).
 const VALUE_FLAGS = new Set(["--file", "--device", "--type", "--balance", "--group",
   "--account", "--category", "--payee", "--memo", "--date", "--month", "--currency",
-  "--format", "--delimiter", "--date-col", "--amount-col", "--payee-col"]);
+  "--format", "--delimiter", "--date-col", "--amount-col", "--payee-col", "--by"]);
 const BOOL_FLAGS = new Set(["--off-budget", "--set", "--dry-run"]);
 
 const RAW = process.argv.slice(2);
@@ -176,6 +176,23 @@ switch (cmd) {
     break;
   }
 
+  case "target": {
+    const doc = load();
+    const state = stateOf(doc);
+    const cat = findCategory(state, positionals()[0] || die("category required"));
+    const type = positionals()[1] || die("type required: monthly | balance | balanceByDate");
+    if (!["monthly", "balance", "balanceByDate"].includes(type)) die(`bad target type ${type}`);
+    const amount = toMilli(positionals()[2] || die("amount required"));
+    const targetMonth = argValue("--by");
+    if (type === "balanceByDate" && !targetMonth) die("balanceByDate needs --by YYYY-MM");
+    const c = clockFor(doc);
+    doc.events.push(ev.categoryTarget(c.send(), { categoryId: cat.id, targetType: type, amount, targetMonth }));
+    save(doc);
+    const ccy = doc.currency || DEFAULT_CURRENCY;
+    console.log(`= target ${type} ${formatMoney(amount, ccy)} on ${cat.name}${targetMonth ? ` by ${targetMonth}` : ""}`);
+    break;
+  }
+
   case "move": {
     const doc = load();
     const state = stateOf(doc);
@@ -286,6 +303,7 @@ switch (cmd) {
   kym spend <amount> --account <acct> --category <cat> [--payee P] [--memo M] [--date ISO]
   kym assign <category> <amount> [--month YYYY-MM] [--set]
   kym move <from> <to> <amount> [--month YYYY-MM]
+  kym target <category> <monthly|balance|balanceByDate> <amount> [--by YYYY-MM]
   kym budget [--month YYYY-MM]
   kym accounts
   kym import <file.csv> --account <acct> [--format airbank|revolut] [--dry-run]
@@ -315,7 +333,9 @@ function printBudget(state, ccy = DEFAULT_CURRENCY) {
       const row = rows[rows.length - 1] || { assigned: 0, activity: 0 };
       const avail = state.categoryAvailable[cat.id] || 0;
       const flag = avail < 0 ? " ⚠" : "";
-      console.log(`  ${("  " + cat.name).padEnd(24)}${f(row.assigned).padStart(13)}${f(row.activity).padStart(13)}${f(avail).padStart(14)}${flag}`);
+      const tp = state.targetProgress[cat.id];
+      const target = tp ? (tp.onTrack ? "  🎯 funded" : `  🎯 need ${f(tp.needed)}`) : "";
+      console.log(`  ${("  " + cat.name).padEnd(24)}${f(row.assigned).padStart(13)}${f(row.activity).padStart(13)}${f(avail).padStart(14)}${flag}${target}`);
     }
   }
   const ccp = Object.entries(state.creditCardPayments || {});
