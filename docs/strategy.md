@@ -25,26 +25,29 @@ KYM = *YNAB's method + Actual's ownership + real p2p privacy + a private AI + ze
 ### Near-term (non-dilutive): ecosystem grant
 KYM is a **flagship local-first consumer app on the Logos stack** — Waku for sync, Codex for backup, Nym for metadata privacy. That is exactly what the **Logos / IFT / Status** ecosystem exists to fund and showcase. A grant is the realistic first money, it's build-in-public friendly, and it doesn't compromise the model. *Action: a one-page pitch — "the private YNAB, built on Waku+Codex" — with the working demo (module + mobile + sync) as proof.*
 
-### Product: open-core "KYM Plus"
-Free & **private core** forever (budget, capture, OCR, sync over community relays, local AI). Paid **Plus** (~€3–5/mo, or a one-time license) for **optional services** where we sell infra/convenience:
+### Product revenue: non-custodial DeFi yield (primary) — NOT open-core
 
-| Plus feature | Why it's OK to charge | Cost we cover |
-|---|---|---|
-| **Encrypted Codex backup** | we store only ciphertext we *can't read* — solves the durability gap | storage |
-| **Premium reliable relays** | guaranteed-uptime Waku so users don't run infra | bandwidth/nodes |
-| **Bank auto-import** | GoCardless aggregator pass-through (#8) | per-connection fee + margin |
-| **Hosted AI option** | local stays free; a bigger hosted model for those who want it | inference |
-| **Cross-household sharing** | shared budgets need group crypto (MLS) | dev + coordination |
+**Decision (2026-07): no open-core.** The whole app stays free and fully open-source — no feature is paywalled. Two revenue lines instead, both ethos-aligned:
 
-The two strongest hooks — **"a financial advisor that never sees your data"** (#9) and **"backup we can't read"** — are things *only a local-first app can honestly say*. They're premium **and** ethos-aligned.
+**1. DeFi savings integration with a fee cut (the real business).** A zero-based budget *knows exactly which money is idle* — the emergency fund, the "true expense" sinking funds (Rule 2), any envelope with a balance target you're not spending soon. That money is perfect to put to work. KYM offers to route it, **non-custodially** (the user's own wallet signs; we never hold funds), into a savings protocol — **Aave** or an **ERC-4626 vault** — and takes a small cut of the yield/flow.
+- "Your Emergency Fund earns ~X% while it waits." Framed as a budgeting feature, not a crypto feature.
+- Non-custodial keeps us out of the "we hold your money" line and matches self-custody / local-first.
+- EUR-native fits the CZK/EUR audience (e.g. EURe on Gnosis Chain; on/off-ramp is the friction to solve).
+- *See the research agent's report (issue #10) for protocols, fee mechanics, chain choice, and MiCA/regulatory notes.*
+
+**2. Voluntary one-time licence fee.** A "pay once if you value it" supporter licence — no gating, no nag-ware, purely voluntary (Obsidian-catalyst / itch.io style). Keeps goodwill and funds baseline dev.
+
+### Grant (unchanged, near-term)
+Logos / IFT / Status ecosystem grant — flagship local-first consumer app on Waku (+ Codex, + Nym). Non-dilutive first money.
 
 ## Guardrails
-- **Stay open-source (open-core).** Non-negotiable for a privacy product — users must be able to *verify* nothing leaks. This is the trust moat, not a giveaway.
-- **No tokenization of the budget app itself.** The audience is privacy + pragmatism, not speculation; a token would repel exactly the users we want, even though we're on Logos.
-- **Free tier must be genuinely useful and private on its own** — Plus is convenience, never a paywall on your own money.
+- **Fully open-source, nothing gated.** Users must be able to verify nothing leaks; the trust moat is total transparency, not a free/paid split.
+- **Non-custodial always.** We construct transactions; the user's wallet signs. We never take custody of funds — legally and ethically the safest line, and consistent with local-first.
+- **DeFi is opt-in and honest about risk** (smart-contract risk, stablecoin depeg, yields vary). Never the default; never hidden.
+- **No token for the budget app itself** — the audience is privacy + pragmatism, not speculation.
 
 ## First moves
-1. Grant pitch (Logos/IFT) + build-in-public thread; the demo is the proof.
-2. Ship the **local AI assistant** (#9/#11) — the clearest "impossible for cloud apps" differentiator.
-3. Stand up **encrypted Codex backup** as the first paid service (also closes the durability gap).
-4. Then bank auto-import (#8) and premium relays once there's a user base to serve.
+1. Grant pitch (Logos/IFT) + build-in-public; the demo is the proof.
+2. Ship the **local AI assistant** (#9) — the clearest "impossible for cloud apps" differentiator.
+3. **Research + design the DeFi savings integration** (issue #10 research) → prototype a non-custodial "put my emergency fund to work" flow.
+4. Add the voluntary licence + a donate/support path.
