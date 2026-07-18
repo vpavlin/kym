@@ -194,7 +194,6 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     marginTop: 12,
   },
-  currency: { color: theme.textDim, fontSize: 32, fontWeight: "600", marginRight: 6 },
   amount: { color: theme.text, fontSize: 64, fontWeight: "800", letterSpacing: 1 },
   hint: { color: theme.textDim, textAlign: "center", marginTop: 4, minHeight: 20 },
   flash: {

@@ -215,10 +215,11 @@ export function SetupScreen() {
         <Text style={styles.dangerText}>Erase local event log</Text>
       </Pressable>
       <Text style={styles.note}>
-        Assets total ${fromMilli(
+        On-budget assets total {formatMoney(
           state.accounts
             .filter((a) => a.onBudget && ["checking", "savings", "cash"].includes(a.type))
-            .reduce((s, a) => s + (state.balances[a.id] ?? 0), 0)
+            .reduce((s, a) => s + (state.balances[a.id] ?? 0), 0),
+          budgetCurrency
         )}.
       </Text>
     </ScrollView>
@@ -256,6 +257,7 @@ const styles = StyleSheet.create({
     borderColor: theme.border,
   },
   chipActive: { backgroundColor: theme.accent, borderColor: theme.accent },
+  chipDisabled: { opacity: 0.4 },
   chipText: { color: theme.textDim, fontWeight: "600", fontSize: 13 },
   chipTextActive: { color: theme.accentText },
   primary: {
