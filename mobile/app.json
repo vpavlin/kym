@@ -27,6 +27,13 @@
         {
           "cameraPermission": "KYM scans the pairing QR shown by another household device."
         }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "cameraPermission": "KYM scans your receipt to prefill the amount.",
+          "photosPermission": "KYM reads a receipt photo to prefill the amount."
+        }
       ]
     ]
   }

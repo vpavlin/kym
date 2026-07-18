@@ -4,18 +4,33 @@
 // and the balances re-fold instantly — never blocks on anything.
 import React, { useMemo, useState } from "react";
 import {
+  ActivityIndicator,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
   View,
 } from "react-native";
+import * as ImagePicker from "expo-image-picker";
 import { useBudget } from "../state/BudgetContext";
 import { formatMoney } from "../lib/engine";
 import { DEFAULT_ACCOUNT } from "../lib/budget";
+import { recognizeReceipt } from "../lib/ocr";
+import { guessCategory } from "../lib/categoryGuess";
 import { theme } from "../ui/theme";
 
 const KEYS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "clr", "0", "del"];
+
+// ISO "YYYY-MM-DD" (from the OCR heuristics) -> ms epoch for the txn date. Parsed
+// as local noon so a timezone offset can't roll it to the previous day. Falls
+// back to "now" if the string is somehow unparseable.
+function isoToEpoch(iso: string): number {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  if (!m) return Date.now();
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 12, 0, 0);
+  const t = d.getTime();
+  return Number.isFinite(t) ? t : Date.now();
+}
 
 export function CaptureScreen({ goSetup }: { goSetup: () => void }) {
   const { state, addExpense, budgetCurrency } = useBudget();
@@ -24,9 +39,83 @@ export function CaptureScreen({ goSetup }: { goSetup: () => void }) {
   const [categoryId, setCategoryId] = useState<string | null>(null);
   const [cleared, setCleared] = useState(false);
   const [flash, setFlash] = useState<string | null>(null);
+  // Receipt-scan state. All of it is an editable PREFILL — the user confirms the
+  // amount on the keypad and can retap category/account before Save.
+  const [scanBusy, setScanBusy] = useState(false);
+  const [fromReceipt, setFromReceipt] = useState(false); // shows the "check it" hint
+  const [receiptMemo, setReceiptMemo] = useState<string | null>(null); // merchant
+  const [receiptDate, setReceiptDate] = useState<number | null>(null); // ms epoch
 
   const accounts = state.accounts.filter((a) => !a.closed);
   const categories = state.categories.filter((c) => !c.hidden);
+
+  // Clear any stashed receipt prefill (merchant/date/from-receipt hint). The
+  // amount + category the user sees stay put; this just drops the OCR provenance.
+  const clearReceipt = () => {
+    setFromReceipt(false);
+    setReceiptMemo(null);
+    setReceiptDate(null);
+  };
+
+  // Snap a receipt -> ML Kit OCR (on-device) -> editable prefill. Everything
+  // degrades gracefully: no permission, cancel, missing native module, or no text
+  // found all fall back to plain manual entry.
+  const scanReceipt = async () => {
+    if (scanBusy) return;
+    setFlash(null);
+    try {
+      const perm = await ImagePicker.requestCameraPermissionsAsync();
+      let result: ImagePicker.ImagePickerResult;
+      if (perm.granted) {
+        result = await ImagePicker.launchCameraAsync({
+          mediaTypes: ["images"],
+          quality: 1,
+          allowsEditing: false,
+        });
+      } else {
+        // No camera permission — let the user pick an existing receipt photo.
+        result = await ImagePicker.launchImageLibraryAsync({
+          mediaTypes: ["images"],
+          quality: 1,
+        });
+      }
+      if (result.canceled || !result.assets?.length) return;
+      const uri = result.assets[0].uri;
+
+      setScanBusy(true);
+      const fields = await recognizeReceipt(uri);
+
+      if (fields.amount && fields.amount > 0) {
+        // cents = milliunits / 10 (1 cent = 10 milli). Cap mirrors the keypad.
+        setCents(Math.min(Math.round(fields.amount / 10), 9_999_999));
+      }
+      setReceiptMemo(fields.merchant ?? null);
+      setReceiptDate(fields.date ? isoToEpoch(fields.date) : null);
+
+      // Prefill category from the merchant, mapped to the user's real category by
+      // name. Only if we didn't already have a manual choice on screen.
+      const guessName = guessCategory(fields.merchant ?? fields.rawText);
+      if (guessName && categoryId === null) {
+        const match = categories.find(
+          (c) => c.name.toLowerCase() === guessName.toLowerCase()
+        );
+        if (match) setCategoryId(match.id);
+      }
+
+      if (fields.amount || fields.merchant || fields.date) {
+        setFromReceipt(true);
+      } else {
+        setFlash("No text found — enter it manually.");
+        setTimeout(() => setFlash(null), 2200);
+      }
+    } catch {
+      // Native module absent (emulator/no arm64 libs), camera unavailable, etc.
+      setFlash("Couldn't scan — enter it manually.");
+      setTimeout(() => setFlash(null), 2200);
+    } finally {
+      setScanBusy(false);
+    }
+  };
 
   // Default account = Checking if present, else the first account.
   const activeAccount =
@@ -58,6 +147,12 @@ export function CaptureScreen({ goSetup }: { goSetup: () => void }) {
       accountId: activeAccount,
       categoryId,
       cleared: cleared ? "cleared" : "uncleared",
+      // From a scanned receipt: use the receipt's date as the txn date and stash
+      // the merchant as the memo. Both are undefined for a plain manual capture,
+      // so the existing defaults (now / no memo) apply. Category was already
+      // prefilled into `categoryId` and is overridable, so it rides along as-is.
+      memo: receiptMemo ?? undefined,
+      date: receiptDate ?? undefined,
     });
     const acctName = accounts.find((a) => a.id === activeAccount)?.name ?? "account";
     const catName = categories.find((c) => c.id === categoryId)?.name ?? "Uncategorized";
@@ -65,6 +160,7 @@ export function CaptureScreen({ goSetup }: { goSetup: () => void }) {
     setCents(0);
     setCategoryId(null);
     setCleared(false);
+    clearReceipt();
     setTimeout(() => setFlash(null), 1600);
   };
 
@@ -95,9 +191,31 @@ export function CaptureScreen({ goSetup }: { goSetup: () => void }) {
         <View style={styles.flash}>
           <Text style={styles.flashText}>{flash}</Text>
         </View>
+      ) : fromReceipt ? (
+        <Text style={[styles.hint, styles.receiptHint]}>
+          {receiptMemo ? `${receiptMemo} · ` : ""}from receipt — check it
+        </Text>
       ) : (
         <Text style={styles.hint}>Type an amount — that's all you need.</Text>
       )}
+
+      {/* Scan receipt: on-device OCR prefill. Falls back to manual entry if the
+          camera/native module is unavailable or nothing is recognized. */}
+      <Pressable
+        style={({ pressed }) => [
+          styles.scanBtn,
+          pressed && styles.keyPressed,
+          scanBusy && styles.saveDisabled,
+        ]}
+        onPress={scanReceipt}
+        disabled={scanBusy}
+      >
+        {scanBusy ? (
+          <ActivityIndicator color={theme.text} />
+        ) : (
+          <Text style={styles.scanBtnText}>⧉  Scan receipt</Text>
+        )}
+      </Pressable>
 
       {/* Optional context: category (defaults to Uncategorized → Review inbox). */}
       <ScrollView
@@ -196,6 +314,23 @@ const styles = StyleSheet.create({
   },
   amount: { color: theme.text, fontSize: 64, fontWeight: "800", letterSpacing: 1 },
   hint: { color: theme.textDim, textAlign: "center", marginTop: 4, minHeight: 20 },
+  receiptHint: { color: theme.warn, fontWeight: "600" },
+  scanBtn: {
+    marginTop: 10,
+    alignSelf: "center",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    minWidth: 180,
+    minHeight: 44,
+    paddingVertical: 10,
+    paddingHorizontal: 18,
+    borderRadius: 12,
+    backgroundColor: theme.surface,
+    borderWidth: 1,
+    borderColor: theme.border,
+  },
+  scanBtnText: { color: theme.text, fontSize: 15, fontWeight: "700" },
   flash: {
     backgroundColor: theme.surfaceAlt,
     borderRadius: 10,
