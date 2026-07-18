@@ -32,8 +32,8 @@ KYM is a **flagship local-first consumer app on the Logos stack** — Waku for s
 **1. DeFi savings integration with a fee cut (the real business).** A zero-based budget *knows exactly which money is idle* — the emergency fund, the "true expense" sinking funds (Rule 2), any envelope with a balance target you're not spending soon. That money is perfect to put to work. KYM offers to route it, **non-custodially** (the user's own wallet signs; we never hold funds), into a savings protocol — **Aave** or an **ERC-4626 vault** — and takes a small cut of the yield/flow.
 - "Your Emergency Fund earns ~X% while it waits." Framed as a budgeting feature, not a crypto feature.
 - Non-custodial keeps us out of the "we hold your money" line and matches self-custody / local-first.
-- EUR-native fits the CZK/EUR audience (e.g. EURe on Gnosis Chain; on/off-ramp is the friction to solve).
-- *See the research agent's report (issue #10) for protocols, fee mechanics, chain choice, and MiCA/regulatory notes.*
+- EUR-native fits the CZK/EUR audience.
+- **Concrete stack (researched — see `research-defi.md`):** Monerium **EURe on Gnosis Chain** (MiCA-compliant e-money token, free 1:1 SEPA on/off-ramp to a personal IBAN) → **sDAI ~4–4.6%** or an **Aave Stable Vault** (ERC-4626, low-risk, no impermanent loss). Fee cut via a **0x/LI.FI integrator fee** skimmed on-chain to KYM's wallet (MetaMask does exactly this at 0.875%). **Account-abstraction wallet** (passkey, no seed phrase, sponsored gas) for onboarding. **Guardrail: strictly non-custodial + transaction-construction-only + no advice**, to stay clear of MiCA CASP authorization (mandatory for EU crypto services after 1 Jul 2026) — get EU counsel before launch.
 
 **2. Voluntary one-time licence fee.** A "pay once if you value it" supporter licence — no gating, no nag-ware, purely voluntary (Obsidian-catalyst / itch.io style). Keeps goodwill and funds baseline dev.
 
