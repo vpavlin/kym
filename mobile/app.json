@@ -19,6 +19,7 @@
       "bundleIdentifier": "co.logos.kym"
     },
     "plugins": [
+      "./plugins/withReleaseSigning",
       "expo-secure-store",
       [
         "expo-camera",
