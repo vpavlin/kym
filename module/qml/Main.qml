@@ -29,10 +29,23 @@ Item {
 
     property string action: ""   // "" | expense | income | assign | move | target | account | category | reconcile
 
-    // Run a backend SLOT; close the form + refresh on success.
-    function run(promise) {
+    // ---- toast (visibility of system status) ----
+    property string toastText: ""
+    property bool toastError: false
+    Timer { id: toastTimer; interval: 3400; onTriggered: root.toastText = "" }
+    function showToast(t, err) { root.toastText = t; root.toastError = err; toastTimer.restart(); }
+
+    // Run a backend SLOT. Our SLOTs RESOLVE with "" on success or an error
+    // message on failure (not a rejection), so inspect the result: show the
+    // error, or close the form + confirm on success.
+    function run(promise, okMsg) {
         if (!promise) return;
-        logos.watch(promise, function () { root.action = ""; }, function (e) { console.log("[kym] action error:", e); });
+        logos.watch(promise,
+            function (result) {
+                if (result && String(result).length > 0) { showToast(String(result), true); }
+                else { root.action = ""; showToast(okMsg || "Saved", false); }
+            },
+            function (e) { showToast("Couldn't reach the budget: " + e, true); });
     }
     function openAction(a) { root.action = (root.action === a ? "" : a); }
 
@@ -94,6 +107,14 @@ Item {
                             color: (budget.readyToAssignRaw < 0) ? warn : (budget.readyToAssignRaw === 0 ? good : accent)
                             font.pixelSize: 20; font.bold: true
                         }
+                        // Non-color status word (WCAG 1.4.1 — don't rely on color alone).
+                        Text {
+                            Layout.alignment: Qt.AlignHCenter
+                            text: budget.readyToAssignRaw < 0 ? "⚠ over-assigned"
+                                : (budget.readyToAssignRaw === 0 ? "✓ all assigned" : "to assign")
+                            color: (budget.readyToAssignRaw < 0) ? warn : (budget.readyToAssignRaw === 0 ? good : dim)
+                            font.pixelSize: 10
+                        }
                     }
                 }
             }
@@ -110,7 +131,7 @@ Item {
                 Btn { label: "Reconcile"; active: action === "reconcile"; onClicked: openAction("reconcile") }
                 Btn { label: "+ Account"; active: action === "account"; onClicked: openAction("account") }
                 Btn { label: "+ Category"; active: action === "category"; onClicked: openAction("category") }
-                Btn { label: "Sync"; onClicked: run(backend.resync()) }
+                Btn { label: "Sync"; onClicked: run(backend.resync(), "Re-broadcasting to peers…") }
             }
 
             // ---- action panel (inline forms; type names, the backend resolves them) ----
@@ -222,7 +243,8 @@ Item {
                                         Text { text: "" + modelData.assigned; color: rowMouse.containsMouse ? accent : dim; font.pixelSize: 14; Layout.preferredWidth: 110; horizontalAlignment: Text.AlignRight }
                                         Text { text: "" + modelData.activity; color: dim; font.pixelSize: 14; Layout.preferredWidth: 110; horizontalAlignment: Text.AlignRight }
                                         Text {
-                                            text: "" + modelData.available
+                                            // ⚠ marks overspent so it's not signalled by red alone (WCAG 1.4.1).
+                                            text: (modelData.negative ? "⚠ " : "") + modelData.available
                                             color: modelData.negative ? warn : good
                                             font.pixelSize: 14; font.bold: true
                                             Layout.preferredWidth: 120; horizontalAlignment: Text.AlignRight
@@ -281,6 +303,18 @@ Item {
                     font.pixelSize: 12
                 }
             }
+        }
+
+        // ---- toast: success / error feedback (Nielsen: visibility of system status) ----
+        Rectangle {
+            visible: root.toastText !== ""
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.bottom: parent.bottom; anchors.bottomMargin: 18
+            radius: 8; color: root.toastError ? "#3a1e22" : "#16311f"
+            border.color: root.toastError ? warn : good; border.width: 1
+            implicitWidth: toastLbl.implicitWidth + 28; implicitHeight: 36
+            Text { id: toastLbl; anchors.centerIn: parent; text: root.toastText
+                   color: root.toastError ? warn : good; font.pixelSize: 13 }
         }
     }
 }
