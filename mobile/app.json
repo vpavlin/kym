@@ -1,0 +1,28 @@
+{
+  "expo": {
+    "name": "KYM",
+    "slug": "kym",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "scheme": "kym",
+    "android": {
+      "package": "co.logos.kym",
+      "versionCode": 1,
+      "predictiveBackGestureEnabled": false
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "co.logos.kym"
+    },
+    "plugins": [
+      "expo-secure-store",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "KYM scans the pairing QR shown by another household device."
+        }
+      ]
+    ]
+  }
+}
