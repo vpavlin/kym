@@ -36,6 +36,8 @@ private:
   // id -> display name, and category id -> group id, so JSON can carry names.
   QMap<QString, QString> m_accountName, m_categoryName, m_groupName, m_categoryGroup;
   QStringList m_groupOrder;
+  QMap<QString, QString> m_accountCurrency; // accountId -> currency code
+  QString m_currency = "CZK";               // the single budget currency
   qint64 m_wall = 0, m_ctr = 0;
 
   kym::HLC nextHlc();
@@ -43,7 +45,7 @@ private:
   void publishBudget();
 
   QString ensureGroup(const QString &name);
-  QString addAccountEv(const QString &name, const QString &type, kym::Money bal);
+  QString addAccountEv(const QString &name, const QString &type, kym::Money bal, const QString &currency = QString());
   QString addCategoryEv(const QString &name, const QString &group);
   void assignEv(const QString &catId, const QString &month, kym::Money amt);
   void moveEv(const QString &fromId, const QString &toId, const QString &month, kym::Money amt);

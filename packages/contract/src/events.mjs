@@ -56,8 +56,8 @@ export const ev = {
   groupCreate: (hlc, { groupId, name }, id) =>
     makeEvent(EventType.GROUP_CREATE, hlc, { groupId, name }, id),
 
-  accountCreate: (hlc, { accountId, name, accountType, onBudget = true, startingBalance = 0, startDate }, id) =>
-    makeEvent(EventType.ACCOUNT_CREATE, hlc, { accountId, name, accountType, onBudget, startingBalance, startDate }, id),
+  accountCreate: (hlc, { accountId, name, accountType, onBudget = true, startingBalance = 0, startDate, currency }, id) =>
+    makeEvent(EventType.ACCOUNT_CREATE, hlc, { accountId, name, accountType, onBudget, startingBalance, startDate, currency }, id),
 
   accountEdit: (hlc, { accountId, name, closed }, id) =>
     makeEvent(EventType.ACCOUNT_EDIT, hlc, { accountId, name, closed }, id),

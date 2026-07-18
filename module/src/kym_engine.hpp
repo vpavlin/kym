@@ -41,7 +41,7 @@ struct Event {
   bool has(const std::string& k) const { return s.count(k) || n.count(k) || b.count(k); }
 };
 
-struct Account { std::string id, name, type; bool onBudget; Money startingBalance; };
+struct Account { std::string id, name, type; bool onBudget; Money startingBalance; std::string currency; };
 struct CategoryMonth { std::string categoryId, month; Money assigned, activity, available; };
 
 struct BudgetState {
@@ -114,7 +114,8 @@ inline BudgetState computeState(const std::vector<Event>& rawEvents, std::option
     } else if (e.type == "account.create") {
       Account a{e.s.at("accountId"), e.s.at("name"), e.s.at("accountType"),
                 e.b.count("onBudget") ? e.b.at("onBudget") : true,
-                e.n.count("startingBalance") ? e.n.at("startingBalance") : 0};
+                e.n.count("startingBalance") ? e.n.at("startingBalance") : 0,
+                e.s.count("currency") ? e.s.at("currency") : std::string()};
       if (!accounts.count(a.id)) accountOrder.push_back(a.id);
       accounts[a.id] = a;
     } else if (e.type == "account.edit") {

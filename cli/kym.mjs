@@ -15,13 +15,13 @@
 
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { ev, Clock, toMilli, fromMilli, monthOf, AccountType, RTA_INFLOW } from "@kym/contract";
+import { ev, Clock, toMilli, fromMilli, formatMoney, DEFAULT_CURRENCY, monthOf, AccountType, RTA_INFLOW } from "@kym/contract";
 import { computeState, checkInvariant, mergeEvents } from "@kym/engine";
 
 // Flags that take a value (consume the next token). Everything else after the
 // command is a positional. Flags may appear anywhere (before or after the command).
 const VALUE_FLAGS = new Set(["--file", "--device", "--type", "--balance", "--group",
-  "--account", "--category", "--payee", "--memo", "--date", "--month"]);
+  "--account", "--category", "--payee", "--memo", "--date", "--month", "--currency"]);
 const BOOL_FLAGS = new Set(["--off-budget", "--set"]);
 
 const RAW = process.argv.slice(2);
@@ -74,8 +74,9 @@ switch (cmd) {
   case "init": {
     if (existsSync(FILE)) die(`${FILE} already exists`);
     const device = argValue("--device") || `dev-${randomUUID().slice(0, 6)}`;
-    save({ v: 1, device, deviceId: randomUUID(), events: [] });
-    console.log(`Initialized KYM budget at ${FILE} (device: ${device})`);
+    const currency = (argValue("--currency") || DEFAULT_CURRENCY).toUpperCase();
+    save({ v: 1, device, deviceId: randomUUID(), currency, events: [] });
+    console.log(`Initialized KYM budget at ${FILE} (device: ${device}, currency: ${currency})`);
     break;
   }
 
@@ -88,13 +89,19 @@ switch (cmd) {
     if (!Object.values(AccountType).includes(type)) die(`bad --type ${type}`);
     const balance = toMilli(argValue("--balance") || "0");
     const onBudget = argValue("--off-budget") ? false : type !== AccountType.TRACKING;
+    const budgetCcy = doc.currency || DEFAULT_CURRENCY;
+    // Foreign accounts must be off-budget tracking (one budget currency; no in-budget FX).
+    const currency = (argValue("--currency") || budgetCcy).toUpperCase();
+    if (onBudget && currency !== budgetCcy) {
+      die(`on-budget accounts must be in the budget currency (${budgetCcy}); use --type tracking for a ${currency} account`);
+    }
     const c = clockFor(doc);
     doc.events.push(ev.accountCreate(c.send(), {
       accountId: `acct:${slug(name)}`, name, accountType: type, onBudget,
-      startingBalance: balance, startDate: new Date().toISOString(),
+      startingBalance: balance, startDate: new Date().toISOString(), currency,
     }));
     save(doc);
-    console.log(`+ account "${name}" (${type}${onBudget ? "" : ", off-budget"}) starting ${fromMilli(balance)}`);
+    console.log(`+ account "${name}" (${type}${onBudget ? "" : ", off-budget"}, ${currency}) starting ${formatMoney(balance, currency)}`);
     break;
   }
 
@@ -130,7 +137,7 @@ switch (cmd) {
       categoryId: RTA_INFLOW, cleared: "cleared",
     }));
     save(doc);
-    console.log(`+ income ${fromMilli(Math.abs(amount))} to ${acct.name} -> Ready to Assign`);
+    console.log(`+ income ${formatMoney(Math.abs(amount), doc.currency || DEFAULT_CURRENCY)} to ${acct.name} -> Ready to Assign`);
     break;
   }
 
@@ -148,7 +155,7 @@ switch (cmd) {
       cleared: "uncleared",
     }));
     save(doc);
-    console.log(`- spent ${fromMilli(Math.abs(amount))} from ${acct.name} on ${cat.name}${argValue("--payee") ? ` @ ${argValue("--payee")}` : ""}`);
+    console.log(`- spent ${formatMoney(Math.abs(amount), doc.currency || DEFAULT_CURRENCY)} from ${acct.name} on ${cat.name}${argValue("--payee") ? ` @ ${argValue("--payee")}` : ""}`);
     break;
   }
 
@@ -162,7 +169,7 @@ switch (cmd) {
     const c = clockFor(doc);
     doc.events.push(ev.assign(c.send(), { categoryId: cat.id, month, amount, mode }));
     save(doc);
-    console.log(`= assigned ${mode === "set" ? "=" : "+"}${fromMilli(amount)} to ${cat.name} (${month})`);
+    console.log(`= assigned ${mode === "set" ? "=" : "+"}${formatMoney(amount, doc.currency || DEFAULT_CURRENCY)} to ${cat.name} (${month})`);
     break;
   }
 
@@ -176,14 +183,14 @@ switch (cmd) {
     const c = clockFor(doc);
     doc.events.push(ev.move(c.send(), { fromCategoryId: from.id, toCategoryId: to.id, month, amount }));
     save(doc);
-    console.log(`~ moved ${fromMilli(amount)} : ${from.name} -> ${to.name} (${month})`);
+    console.log(`~ moved ${formatMoney(amount, doc.currency || DEFAULT_CURRENCY)} : ${from.name} -> ${to.name} (${month})`);
     break;
   }
 
   case "budget": {
     const doc = load();
     const state = stateOf(doc, M ? { asOf: M } : {});
-    printBudget(state);
+    printBudget(state, doc.currency || DEFAULT_CURRENCY);
     break;
   }
 
@@ -193,7 +200,8 @@ switch (cmd) {
     console.log(`\n  Accounts (device: ${doc.device})`);
     console.log(`  ${"─".repeat(44)}`);
     for (const a of state.accounts) {
-      console.log(`  ${a.name.padEnd(20)} ${fromMilli(state.balances[a.id] || 0).padStart(12)}  ${a.onBudget ? a.type : a.type + " (off-budget)"}`);
+      const ac = a.currency || doc.currency || DEFAULT_CURRENCY;
+      console.log(`  ${a.name.padEnd(20)} ${formatMoney(state.balances[a.id] || 0, ac).padStart(14)}  ${a.onBudget ? a.type : a.type + " (off-budget)"}`);
     }
     console.log("");
     break;
@@ -210,7 +218,7 @@ switch (cmd) {
     save(doc);
     const gained = merged.length - before;
     console.log(`Synced ${other}: ${merged.length} events total (+${gained} new). Both logs now converge.`);
-    printBudget(stateOf(doc));
+    printBudget(stateOf(doc), doc.currency || DEFAULT_CURRENCY);
     break;
   }
 
@@ -240,8 +248,9 @@ switch (cmd) {
   Budget file: ${FILE} (override with --file or KYM_FILE)`);
 }
 
-function printBudget(state) {
+function printBudget(state, ccy = DEFAULT_CURRENCY) {
   const inv = checkInvariant(state);
+  const f = (m) => formatMoney(m, ccy);
   const byGroup = new Map();
   for (const cat of state.categories) {
     const g = state.groups.find((x) => x.id === cat.groupId)?.name || "—";
@@ -249,7 +258,7 @@ function printBudget(state) {
     byGroup.get(g).push(cat);
   }
   console.log(`\n  Budget — ${state.currentMonth || "(no activity yet)"}`);
-  console.log(`  Ready to Assign: ${fromMilli(state.readyToAssign)}${state.readyToAssign < 0 ? "  ⚠ negative" : state.readyToAssign === 0 ? "  ✓ every dollar has a job" : ""}`);
+  console.log(`  Ready to Assign: ${f(state.readyToAssign)}${state.readyToAssign < 0 ? "  ⚠ negative" : state.readyToAssign === 0 ? "  ✓ every dollar has a job" : ""}`);
   console.log(`  ${"─".repeat(58)}`);
   console.log(`  ${"CATEGORY".padEnd(24)}${"ASSIGNED".padStart(11)}${"ACTIVITY".padStart(11)}${"AVAILABLE".padStart(12)}`);
   for (const [group, cats] of byGroup) {
@@ -259,7 +268,7 @@ function printBudget(state) {
       const row = rows[rows.length - 1] || { assigned: 0, activity: 0 };
       const avail = state.categoryAvailable[cat.id] || 0;
       const flag = avail < 0 ? " ⚠" : "";
-      console.log(`  ${("  " + cat.name).padEnd(24)}${fromMilli(row.assigned).padStart(11)}${fromMilli(row.activity).padStart(11)}${fromMilli(avail).padStart(12)}${flag}`);
+      console.log(`  ${("  " + cat.name).padEnd(24)}${f(row.assigned).padStart(13)}${f(row.activity).padStart(13)}${f(avail).padStart(14)}${flag}`);
     }
   }
   const ccp = Object.entries(state.creditCardPayments || {});
@@ -267,9 +276,9 @@ function printBudget(state) {
     console.log(`  Credit Card Payments`);
     for (const [acctId, avail] of ccp) {
       const acct = state.accounts.find((a) => a.id === acctId);
-      console.log(`  ${("  " + (acct?.name || acctId)).padEnd(46)}${fromMilli(avail).padStart(12)}`);
+      console.log(`  ${("  " + (acct?.name || acctId)).padEnd(48)}${f(avail).padStart(14)}`);
     }
   }
   console.log(`  ${"─".repeat(58)}`);
-  console.log(`  invariant ${inv.ok ? "OK ✓" : `BROKEN ✗ (diff ${fromMilli(inv.diff)})`}  ·  assets ${fromMilli(inv.assets)} = categories ${fromMilli(inv.categoriesAvail)} + RTA ${fromMilli(inv.readyToAssign)}\n`);
+  console.log(`  invariant ${inv.ok ? "OK ✓" : `BROKEN ✗ (diff ${f(inv.diff)})`}  ·  assets ${f(inv.assets)} = categories ${f(inv.categoriesAvail)} + RTA ${f(inv.readyToAssign)}\n`);
 }

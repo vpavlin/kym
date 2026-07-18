@@ -1,8 +1,9 @@
-// Drives the REAL C++ engine (kym_engine.hpp) with the same demo budget the
-// module's loadDemo() seeds, and emits the budget JSON the grid QML renders.
-// Proves the preview screenshot is engine-computed, not mocked.
+// Drives the REAL C++ engine (kym_engine.hpp) with a CZK demo budget (plus a EUR
+// off-budget tracking account) and emits the budget JSON the grid QML renders.
+// Money is formatted per currency via money_format.hpp (mirrors the TS formatter).
 //   g++ -std=c++17 -I../src gen_budget.cpp -o gen && ./gen > budget.json
 #include "../src/kym_engine.hpp"
+#include "../src/money_format.hpp"
 #include <iostream>
 #include <sstream>
 #include <map>
@@ -10,24 +11,22 @@
 
 using namespace kym;
 
+static const std::string BUDGET_CCY = "CZK";
 static int64_t T = 1000000;
 static HLC h() { return HLC{T++, 0, "basecamp"}; }
-static std::string money(Money m) {
-  char buf[32]; std::snprintf(buf, sizeof(buf), "%.2f", m / 1000.0); return buf;
-}
 
 int main() {
   const std::string M = "2026-07";
   const std::string d = M + "-15T12:00:00Z";
   std::vector<Event> ev;
-  std::map<std::string, std::string> accName, catName, catGroup;
+  std::map<std::string, std::string> accName, catName, catGroup, accCcy;
   std::vector<std::string> groupOrder = {"Bills", "Everyday", "Goals"};
 
-  auto acct = [&](std::string id, std::string name, std::string type, Money bal) {
+  auto acct = [&](std::string id, std::string name, std::string type, Money bal, bool onBudget, std::string ccy) {
     Event e; e.id = "a" + id; e.type = "account.create"; e.hlc = h();
     e.s["accountId"] = id; e.s["name"] = name; e.s["accountType"] = type;
-    e.s["startDate"] = d; e.n["startingBalance"] = bal; e.b["onBudget"] = true;
-    ev.push_back(e); accName[id] = name;
+    e.s["startDate"] = d; e.n["startingBalance"] = bal; e.b["onBudget"] = onBudget; e.s["currency"] = ccy;
+    ev.push_back(e); accName[id] = name; accCcy[id] = ccy;
   };
   auto cat = [&](std::string id, std::string name, std::string group) {
     Event e; e.id = "c" + id; e.type = "category.create"; e.hlc = h();
@@ -44,16 +43,19 @@ int main() {
     e.s["txnId"] = e.id; e.s["accountId"] = acc; e.n["amount"] = amt; e.s["date"] = d;
     e.s["categoryId"] = c; ev.push_back(e);
   };
+  auto fb = [](Money m) { return formatMoney(m, BUDGET_CCY); };  // budget figures
 
-  acct("chk", "Checking", "checking", 2500000);
-  acct("visa", "Visa", "creditCard", 0);
+  // A realistic Czech household month (values in CZK; Revolut in EUR, tracked off-budget).
+  acct("chk", "Checking", "checking", 30000000, true, "CZK");
+  acct("visa", "Visa", "creditCard", 0, true, "CZK");
+  acct("revolut", "Revolut", "tracking", 420000, false, "EUR");
   cat("rent", "Rent", "Bills"); cat("util", "Utilities", "Bills");
   cat("groc", "Groceries", "Everyday"); cat("dine", "Dining", "Everyday"); cat("fun", "Fun Money", "Everyday");
   cat("save", "Emergency Fund", "Goals");
-  txn("chk", 3000000, RTA_INFLOW);
-  assign("rent", 1200000); assign("util", 180000); assign("groc", 500000);
-  assign("dine", 200000); assign("fun", 120000); assign("save", 400000);
-  txn("chk", -1200000, "rent"); txn("chk", -164300, "groc"); txn("visa", -42800, "dine");
+  txn("chk", 45000000, RTA_INFLOW);                       // salary
+  assign("rent", 18000000); assign("util", 3000000); assign("groc", 8000000);
+  assign("dine", 3000000); assign("fun", 2000000); assign("save", 5000000);
+  txn("chk", -18000000, "rent"); txn("chk", -2450000, "groc"); txn("visa", -680000, "dine");
 
   BudgetState st = computeState(ev);
   Invariant inv = checkInvariant(st);
@@ -66,17 +68,19 @@ int main() {
 
   std::ostringstream o;
   o << "{";
+  o << "\"currency\":\"" << BUDGET_CCY << "\",";
   o << "\"currentMonth\":\"" << st.currentMonth << "\",";
-  o << "\"readyToAssign\":\"" << money(st.readyToAssign) << "\",";
+  o << "\"readyToAssign\":\"" << fb(st.readyToAssign) << "\",";
   o << "\"readyToAssignRaw\":" << st.readyToAssign << ",";
   o << "\"invariant\":{\"ok\":" << (inv.ok ? "true" : "false")
-    << ",\"assets\":\"" << money(inv.assets) << "\",\"categoriesAvail\":\"" << money(inv.categoriesAvail)
-    << "\",\"diff\":\"" << money(inv.diff) << "\"},";
+    << ",\"assets\":\"" << fb(inv.assets) << "\",\"categoriesAvail\":\"" << fb(inv.categoriesAvail)
+    << "\",\"diff\":\"" << fb(inv.diff) << "\"},";
   o << "\"accounts\":[";
   for (size_t i = 0; i < st.accounts.size(); i++) {
     auto &a = st.accounts[i];
+    std::string ac = a.currency.empty() ? BUDGET_CCY : a.currency;
     o << (i ? "," : "") << "{\"name\":\"" << accName[a.id] << "\",\"type\":\"" << a.type
-      << "\",\"balance\":\"" << money(st.balances[a.id]) << "\"}";
+      << (a.onBudget ? "" : " (off-budget)") << "\",\"balance\":\"" << formatMoney(st.balances[a.id], ac) << "\"}";
   }
   o << "],\"groups\":[";
   bool firstG = true;
@@ -87,8 +91,8 @@ int main() {
       if (catGroup[cid] != g) continue;
       auto [a, act] = rowFor(cid);
       Money avail = st.categoryAvailable.count(cid) ? st.categoryAvailable[cid] : 0;
-      o << (firstC ? "" : ",") << "{\"name\":\"" << catName[cid] << "\",\"assigned\":\"" << money(a)
-        << "\",\"activity\":\"" << money(act) << "\",\"available\":\"" << money(avail)
+      o << (firstC ? "" : ",") << "{\"name\":\"" << catName[cid] << "\",\"assigned\":\"" << fb(a)
+        << "\",\"activity\":\"" << fb(act) << "\",\"available\":\"" << fb(avail)
         << "\",\"negative\":" << (avail < 0 ? "true" : "false") << "}";
       firstC = false;
     }
@@ -97,7 +101,7 @@ int main() {
   o << "],\"creditCardPayments\":[";
   bool firstP = true;
   for (auto &kv : st.creditCardPayments) {
-    o << (firstP ? "" : ",") << "{\"name\":\"" << accName[kv.first] << "\",\"available\":\"" << money(kv.second) << "\"}";
+    o << (firstP ? "" : ",") << "{\"name\":\"" << accName[kv.first] << "\",\"available\":\"" << fb(kv.second) << "\"}";
     firstP = false;
   }
   o << "]}";

@@ -1,4 +1,5 @@
 #include "kym_backend.h"
+#include "money_format.hpp"
 
 #include <QDate>
 #include <QDateTime>
@@ -26,8 +27,10 @@ static kym::Money toMilli(const QString &in) {
   return neg ? -v : v;
 }
 
-// Display milliunits with 2 decimals (rounding is display-only, never stored).
-static QString money(kym::Money m) { return QString::number(m / 1000.0, 'f', 2); }
+// Display milliunits in a currency (rounding is display-only, never stored).
+static QString money(kym::Money m, const QString &ccy) {
+  return QString::fromStdString(kym::formatMoney(m, ccy.toStdString()));
+}
 
 static QString slug(const QString &name) {
   QString s = name.toLower();
@@ -67,17 +70,20 @@ QString KymBackend::ensureGroup(const QString &name) {
   return gid;
 }
 
-QString KymBackend::addAccountEv(const QString &name, const QString &type, kym::Money bal) {
+QString KymBackend::addAccountEv(const QString &name, const QString &type, kym::Money bal, const QString &currency) {
   QString id = "acct:" + slug(name);
+  QString ccy = currency.isEmpty() ? m_currency : currency.toUpper();
   auto e = baseEvent("account.create", nextHlc());
   e.s["accountId"] = id.toStdString();
   e.s["name"] = name.toStdString();
   e.s["accountType"] = type.toStdString();
   e.s["startDate"] = QDate::currentDate().toString(Qt::ISODate).toStdString();
+  e.s["currency"] = ccy.toStdString();
   e.n["startingBalance"] = bal;
   e.b["onBudget"] = (type != "tracking");
   m_log.push_back(e);
   m_accountName[id] = name;
+  m_accountCurrency[id] = ccy;
   return id;
 }
 
@@ -178,24 +184,26 @@ QString KymBackend::moveMoney(QString fromCategory, QString toCategory, QString 
 QString KymBackend::loadDemo() {
   if (!m_log.empty()) return "budget already has data";
   const QString m = currentMonth();
-  QString chk = addAccountEv("Checking", "checking", toMilli("2500"));
+  // A Czech household month in CZK, with a EUR account tracked off-budget.
+  QString chk = addAccountEv("Checking", "checking", toMilli("30000"));
   addAccountEv("Visa", "creditCard", 0);
+  addAccountEv("Revolut", "tracking", toMilli("420"), "EUR");
   QString rent = addCategoryEv("Rent", "Bills");
   QString util = addCategoryEv("Utilities", "Bills");
   QString groc = addCategoryEv("Groceries", "Everyday");
   QString dine = addCategoryEv("Dining", "Everyday");
   QString fun = addCategoryEv("Fun Money", "Everyday");
   QString save = addCategoryEv("Emergency Fund", "Goals");
-  txnEv(chk, toMilli("3000"), m, QString::fromStdString(kym::RTA_INFLOW)); // paycheck
-  assignEv(rent, m, toMilli("1200"));
-  assignEv(util, m, toMilli("180"));
-  assignEv(groc, m, toMilli("500"));
-  assignEv(dine, m, toMilli("200"));
-  assignEv(fun, m, toMilli("120"));
-  assignEv(save, m, toMilli("400"));
-  txnEv(chk, -std::llabs(toMilli("1200")), m, rent);
-  txnEv(chk, -std::llabs(toMilli("164.30")), m, groc);
-  txnEv(findAccountId("Visa"), -std::llabs(toMilli("42.80")), m, dine); // on the credit card
+  txnEv(chk, toMilli("45000"), m, QString::fromStdString(kym::RTA_INFLOW)); // salary
+  assignEv(rent, m, toMilli("18000"));
+  assignEv(util, m, toMilli("3000"));
+  assignEv(groc, m, toMilli("8000"));
+  assignEv(dine, m, toMilli("3000"));
+  assignEv(fun, m, toMilli("2000"));
+  assignEv(save, m, toMilli("5000"));
+  txnEv(chk, -std::llabs(toMilli("18000")), m, rent);
+  txnEv(chk, -std::llabs(toMilli("2450")), m, groc);
+  txnEv(findAccountId("Visa"), -std::llabs(toMilli("680")), m, dine); // on the credit card
   publishBudget();
   return "";
 }
@@ -220,27 +228,31 @@ void KymBackend::publishBudget() {
     return {a, act};
   };
 
+  const QString bc = m_currency; // budget currency for all envelope/RTA figures
+
   QJsonObject root;
+  root["currency"] = bc;
   root["currentMonth"] = QString::fromStdString(st.currentMonth);
-  root["readyToAssign"] = money(st.readyToAssign);
+  root["readyToAssign"] = money(st.readyToAssign, bc);
   root["readyToAssignRaw"] = (double)st.readyToAssign;
 
   QJsonObject invo;
   invo["ok"] = inv.ok;
-  invo["assets"] = money(inv.assets);
-  invo["categoriesAvail"] = money(inv.categoriesAvail);
-  invo["diff"] = money(inv.diff);
+  invo["assets"] = money(inv.assets, bc);
+  invo["categoriesAvail"] = money(inv.categoriesAvail, bc);
+  invo["diff"] = money(inv.diff, bc);
   root["invariant"] = invo;
 
   QJsonArray accs;
   for (const auto &a : st.accounts) {
     QJsonObject o;
     QString id = QString::fromStdString(a.id);
+    QString ac = m_accountCurrency.value(id, bc); // account's own currency (EUR tracking etc.)
     o["id"] = id;
     o["name"] = m_accountName.value(id, id);
     o["type"] = QString::fromStdString(a.type);
     o["onBudget"] = a.onBudget;
-    o["balance"] = money(st.balances.count(a.id) ? st.balances.at(a.id) : 0);
+    o["balance"] = money(st.balances.count(a.id) ? st.balances.at(a.id) : 0, ac);
     accs.append(o);
   }
   root["accounts"] = accs;
@@ -259,9 +271,9 @@ void KymBackend::publishBudget() {
       QJsonObject c;
       c["id"] = cid;
       c["name"] = m_categoryName.value(cid, cid);
-      c["assigned"] = money(a);
-      c["activity"] = money(act);
-      c["available"] = money(avail);
+      c["assigned"] = money(a, bc);
+      c["activity"] = money(act, bc);
+      c["available"] = money(avail, bc);
       c["negative"] = avail < 0;
       cats.append(c);
     }
@@ -276,7 +288,7 @@ void KymBackend::publishBudget() {
     QJsonObject o;
     o["account"] = id;
     o["name"] = m_accountName.value(id, id);
-    o["available"] = money(kv.second);
+    o["available"] = money(kv.second, bc);
     ccp.append(o);
   }
   root["creditCardPayments"] = ccp;

@@ -8,7 +8,7 @@ import "budget.js" as Budget
 // the full Basecamp host. The grid code is identical to the shipped Main.qml.
 Rectangle {
     id: root
-    width: 760; height: 620
+    width: 760; height: 700
     color: bg
 
     property var budget: Budget.data
@@ -44,7 +44,7 @@ Rectangle {
                     Text { text: "Ready to Assign"; color: dim; font.pixelSize: 11; Layout.alignment: Qt.AlignHCenter }
                     Text {
                         Layout.alignment: Qt.AlignHCenter
-                        text: "$" + (budget.readyToAssign || "0.00")
+                        text: "" + (budget.readyToAssign || "0.00")
                         color: (budget.readyToAssignRaw < 0) ? warn : (budget.readyToAssignRaw === 0 ? good : accent)
                         font.pixelSize: 20; font.bold: true
                     }
@@ -86,10 +86,10 @@ Rectangle {
                                     anchors.fill: parent
                                     anchors.leftMargin: 10; anchors.rightMargin: 10
                                     Text { text: modelData.name; color: fg; font.pixelSize: 14; Layout.fillWidth: true }
-                                    Text { text: "$" + modelData.assigned; color: dim; font.pixelSize: 14; Layout.preferredWidth: 110; horizontalAlignment: Text.AlignRight }
-                                    Text { text: "$" + modelData.activity; color: dim; font.pixelSize: 14; Layout.preferredWidth: 110; horizontalAlignment: Text.AlignRight }
+                                    Text { text: "" + modelData.assigned; color: dim; font.pixelSize: 14; Layout.preferredWidth: 110; horizontalAlignment: Text.AlignRight }
+                                    Text { text: "" + modelData.activity; color: dim; font.pixelSize: 14; Layout.preferredWidth: 110; horizontalAlignment: Text.AlignRight }
                                     Text {
-                                        text: "$" + modelData.available
+                                        text: "" + modelData.available
                                         color: modelData.negative ? warn : good
                                         font.pixelSize: 14; font.bold: true
                                         Layout.preferredWidth: 120; horizontalAlignment: Text.AlignRight
@@ -109,7 +109,7 @@ Rectangle {
                     delegate: RowLayout {
                         Layout.fillWidth: true
                         Text { text: modelData.name; color: fg; font.pixelSize: 14; Layout.fillWidth: true; leftPadding: 10 }
-                        Text { text: "$" + modelData.available; color: good; font.pixelSize: 14; font.bold: true; Layout.preferredWidth: 120; horizontalAlignment: Text.AlignRight }
+                        Text { text: "" + modelData.available; color: good; font.pixelSize: 14; font.bold: true; Layout.preferredWidth: 120; horizontalAlignment: Text.AlignRight }
                     }
                 }
 
@@ -120,7 +120,7 @@ Rectangle {
                         Layout.fillWidth: true
                         Text { text: modelData.name; color: fg; font.pixelSize: 14; Layout.fillWidth: true; leftPadding: 10 }
                         Text { text: modelData.type; color: dim; font.pixelSize: 12; Layout.preferredWidth: 110; horizontalAlignment: Text.AlignRight }
-                        Text { text: "$" + modelData.balance; color: fg; font.pixelSize: 14; Layout.preferredWidth: 120; horizontalAlignment: Text.AlignRight }
+                        Text { text: "" + modelData.balance; color: fg; font.pixelSize: 14; Layout.preferredWidth: 120; horizontalAlignment: Text.AlignRight }
                     }
                 }
             }
@@ -135,8 +135,8 @@ Rectangle {
                 text: {
                     var iv = budget.invariant || {};
                     return (iv.ok ? "✓ invariant holds" : "✗ invariant broken")
-                        + "   ·   assets $" + (iv.assets||"0.00") + "  =  categories $" + (iv.categoriesAvail||"0.00")
-                        + "  +  RTA $" + (budget.readyToAssign||"0.00");
+                        + "   ·   assets " + (iv.assets||"0.00") + "  =  categories " + (iv.categoriesAvail||"0.00")
+                        + "  +  RTA " + (budget.readyToAssign||"0.00");
                 }
                 color: (budget.invariant && budget.invariant.ok) ? good : warn
                 font.pixelSize: 12

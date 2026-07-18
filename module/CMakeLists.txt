@@ -24,6 +24,7 @@ logos_module(
         src/kym_backend.h
         src/kym_backend.cpp
         src/kym_engine.hpp
+        src/money_format.hpp
     INCLUDE_DIRS
         src
 )
