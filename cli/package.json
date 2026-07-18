@@ -1,0 +1,11 @@
+{
+  "name": "@kym/cli",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "bin": { "kym-demo": "demo.mjs" },
+  "dependencies": {
+    "@kym/contract": "file:../packages/contract",
+    "@kym/engine": "file:../packages/engine"
+  }
+}

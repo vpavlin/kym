@@ -1,0 +1,14 @@
+{
+  "name": "@kym/contract",
+  "version": "0.1.0",
+  "description": "KYM shared wire contract — event schema, milliunit money, hybrid logical clock. Dependency-free ESM, re-implementable in C++/Kotlin.",
+  "type": "module",
+  "main": "src/index.mjs",
+  "exports": {
+    ".": "./src/index.mjs",
+    "./money": "./src/money.mjs",
+    "./hlc": "./src/hlc.mjs",
+    "./events": "./src/events.mjs"
+  },
+  "private": true
+}

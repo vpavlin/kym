@@ -1,0 +1,16 @@
+{
+  "name": "kym",
+  "version": "0.1.0",
+  "description": "KYM — Know Your Money. Local-first, p2p, zero-based budget on the Logos stack.",
+  "type": "module",
+  "private": true,
+  "workspaces": [
+    "packages/contract",
+    "packages/engine",
+    "cli"
+  ],
+  "scripts": {
+    "test": "node --test packages/engine/test/*.test.mjs",
+    "demo": "node cli/demo.mjs"
+  }
+}

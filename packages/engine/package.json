@@ -1,0 +1,15 @@
+{
+  "name": "@kym/engine",
+  "version": "0.1.0",
+  "description": "KYM budget engine — pure deterministic fold from a merged event log to budget state, plus the zero-based invariant oracle. Reference implementation; the C++ module mirrors it.",
+  "type": "module",
+  "main": "src/index.mjs",
+  "exports": { ".": "./src/index.mjs" },
+  "dependencies": {
+    "@kym/contract": "file:../contract"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "private": true
+}

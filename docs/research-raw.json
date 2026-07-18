@@ -1,0 +1,884 @@
+{
+  "summary": "Research YNAB feature surface + local-first p2p tradeoffs to inform architecture for a Perun-style budgeting app",
+  "agentCount": 6,
+  "logs": [],
+  "result": {
+    "findings": [
+      {
+        "dimension": "YNAB core budgeting data model, invariants, and philosophy",
+        "summary": "YNAB is a zero-based, digital-envelope budgeting system whose data model rests on one principle: every dollar currently sitting in on-budget accounts must be either assigned to a category (where it sits as that category's \"Available\" balance) or waiting in the single global \"Ready to Assign\" pool. Its four rules (give every dollar a job; embrace true expenses; roll with the punches; age your money) are the UX framing of that invariant. The heart of the model is a per-category, per-month grid of three numbers — Assigned (budgeted), Activity (sum of categorized transactions), and Available (the running envelope balance) — where Available = prior-month carryover + Assigned + Activity. Positive Available rolls forward month to month like cash in an envelope; negative Available is handled in two distinct ways depending on whether the overspending was funded by cash (deducted from next month's Ready to Assign) or by credit (converted into card debt tracked in an automatic Credit Card Payment category). Accounts, transactions, and category balances are tightly coupled: a categorized transaction simultaneously changes an account balance and a category's Activity, and credit-card spending additionally shifts budgeted money from the spending category into that card's payment category so the total budgeted money is conserved. All amounts are stored as integer \"milliunits\" (currency × 1000) with outflows negative and inflows positive.",
+        "key_findings": [
+          {
+            "point": "The global zero-based invariant every clone must enforce",
+            "detail": "The fundamental identity: sum of all category Available balances + Ready to Assign = total money in on-budget accounts. Every dollar is partitioned into exactly one place — a category envelope or the Ready-to-Assign pool. Assigning money is a zero-sum move (RTA down, category Available up). 'Zero-based' means the goal state is Ready to Assign = 0 (every dollar has a job). You can only budget money you actually have on hand, never projected/future income.",
+            "priority": "core"
+          },
+          {
+            "point": "Ready to Assign (to_be_budgeted) is a SINGLE global pool, not per-month",
+            "detail": "In the API it surfaces as MonthDetail.to_be_budgeted, but conceptually it is one number for the whole budget, computed as: total inflows categorized to the special 'Inflow: Ready to Assign' category − total Assigned across all categories/months − prior cash overspending. It is not siloed by month; assigning in a future month draws from the same pool. It can go negative if you over-assign or after cash overspending. MonthDetail.income = total 'Inflow: Ready to Assign' transactions that month.",
+            "priority": "core"
+          },
+          {
+            "point": "The monthly budget grid: three numbers per category per month",
+            "detail": "For each (category, month): Assigned/budgeted (money you allocated this month), Activity (signed sum of all transactions categorized here this month; spending is negative, refunds positive), and Available/balance. API relation stated explicitly: balance = budgeted + activity — but that is WITHIN a month and must be extended by carryover (see rollover). Only Assigned/budgeted is user-editable per month; Activity and Available are derived and read-only.",
+            "priority": "core"
+          },
+          {
+            "point": "Rollover formula — how Available carries month to month",
+            "detail": "Available(this month) = carryover_from_prior_month + Assigned(this month) + Activity(this month). Carryover = prior month's ending Available IF positive (envelope money accumulates across months, enabling sinking funds for 'true expenses'/Rule 2). A positive balance you don't spend stays in the category next month.",
+            "priority": "core"
+          },
+          {
+            "point": "Cash overspending: red, hits next month's Ready to Assign",
+            "detail": "If a category's Available goes negative because of spending from a cash/checking (asset) account, the negative does NOT roll forward into that category (the category resets toward 0 next month). Instead the overspent amount is subtracted from the next month's Ready to Assign pool — you're forced to cover past mistakes with real dollars before assigning new ones. This is how the global invariant stays true when an envelope is overdrawn.",
+            "priority": "core"
+          },
+          {
+            "point": "Credit-card spending mechanics and the automatic Credit Card Payment category",
+            "detail": "Every on-budget credit card account gets an auto-created, system-managed Credit Card Payment category (in a system 'Credit Card Payments' group). When you spend on a credit card from a FUNDED category: the spending category's Activity is −X (its Available drops X) AND the card's payment category Available rises +X. Net category-Available change is zero — budgeted money is conserved, merely relocated to 'money set aside to pay this card.' Simultaneously the credit card ACCOUNT balance goes −X (new debt). A fully-paid-off card => payment category Available == card's balance owed.",
+            "priority": "core"
+          },
+          {
+            "point": "Credit overspending: yellow/orange, becomes debt — does NOT reduce Ready to Assign",
+            "detail": "If you spend on credit but the spending category didn't have enough Available, only the funded portion moves to the payment category; the shortfall shows as an Underfunded/overspending alert in the Credit Card Payment category (not a hit to RTA). It represents new debt not yet covered by budgeted money. This is the key contrast with cash overspending, which DOES reduce RTA. A clone must branch overspending handling on the account type (asset vs. credit) of the funding account.",
+            "priority": "core"
+          },
+          {
+            "point": "Accounts ↔ transactions ↔ category balances coupling",
+            "detail": "A transaction has account_id, signed amount (milliunits, outflow negative), and optionally category_id (or subtransactions for splits, each with its own category). A categorized outflow decrements both the account balance and the category's Activity. on_budget accounts (checking/savings/cash/creditCard/lineOfCredit) participate in the budget; off-budget accounts (tracking assets/loans) do not affect categories. Transfers between two on-budget accounts are NOT categorized (no budget impact); transfers to off-budget or a credit-card payment are handled specially. transfer_transaction_id links the two mirrored sides of a transfer.",
+            "priority": "core"
+          },
+          {
+            "point": "Category groups vs. categories, including system-managed groups",
+            "detail": "Categories nest under exactly one category group (category_group_id). User groups organize the budget for display; ordering matters. Special system groups/categories exist and are flagged internal/hidden: the 'Inflow: Ready to Assign' category (income target) and one Credit Card Payment category per credit card. Hidden categories move to a Hidden group but retain balances. A clone must model these system categories as non-deletable and non-directly-editable.",
+            "priority": "important"
+          },
+          {
+            "point": "Moving money between categories ('Roll With the Punches' / WAM)",
+            "detail": "Rule 3 is a first-class operation: to cover an overspent or underfunded category, the user moves budgeted dollars from another category. Mechanically this decreases one category's Assigned/Available and increases another's by the same amount, net-zero to Ready to Assign. This must be a supported, cheap, reversible operation — plans are expected to change intra-month rather than the budget 'breaking.'",
+            "priority": "important"
+          },
+          {
+            "point": "Milliunits and sign conventions",
+            "detail": "All monetary amounts are integers in milliunits (currency unit × 1000; $10.50 = 10500) to avoid floating-point error. Outflows/spending are negative, inflows positive. A faithful clone should store money as integers and never as floats.",
+            "priority": "important"
+          },
+          {
+            "point": "The four rules as philosophy layered on the model",
+            "detail": "Rule 1 Give Every Dollar a Job = drive RTA to 0 using only on-hand money. Rule 2 Embrace Your True Expenses = accumulate Available across months for irregular bills (sinking funds; enabled by positive-balance rollover and goals). Rule 3 Roll With the Punches = move money between categories. Rule 4 Age Your Money = spend older dollars; Age of Money is a derived metric (MonthDetail.age_of_money) measuring how many days elapse between receiving income and spending it, with the milestone of living on last month's income.",
+            "priority": "important"
+          },
+          {
+            "point": "Goals are metadata, not balances",
+            "detail": "Categories carry optional goal fields (goal_type TB/TBD/MF/NEED, target, target_date, cadence, underfunded, percentage_complete). Goals influence suggested funding and 'underfunded' alerts but do NOT themselves move money or alter Available — money only moves via assignment or transactions. A clone can treat goals as a separate advisory layer over the core grid.",
+            "priority": "nice-to-have"
+          }
+        ],
+        "architecture_implications": [
+          "Store money as integer milliunits everywhere; outflow negative, inflow positive. No floats.",
+          "Model Ready to Assign as a single derived global value, not a stored per-month field: RTA = Σ(income to 'Inflow: Ready to Assign') − Σ(all Assigned) − Σ(prior cash overspending). Recompute rather than mutate.",
+          "The canonical per-category-per-month record stores only Assigned; Activity and Available are DERIVED. Available(m) = max(0-or-carryover of Available(m−1)) + Assigned(m) + Activity(m). Carry forward positive balances; do not carry negative balances into the same category.",
+          "Enforce the global invariant Σ(all category Available) + Ready to Assign == Σ(on-budget account balances) as a consistency check / test oracle after every mutation.",
+          "Overspending resolution must branch on the funding account's type: cash/asset overspend → subtract from next month's Ready to Assign; credit overspend → increase card debt and surface as underfunding in that card's Credit Card Payment category (never reduce RTA).",
+          "Credit card handling requires an auto-created, system-managed Credit Card Payment category per on-budget credit card. A categorized credit outflow must atomically: decrement spending category Available, increment (by the funded portion) the payment category Available, and decrement the card account balance. Credit-card payments are transfers that reduce the payment category Available.",
+          "A transaction mutation must atomically update both an account balance and (if categorized) exactly one category's Activity in one month; splits fan out into subtransactions each hitting a category. Transfers between two on-budget accounts must be non-categorized and budget-neutral, with the two sides linked.",
+          "Distinguish on_budget vs off_budget accounts at the type level; only on-budget accounts feed categories and Ready to Assign. Support the type enum (checking, savings, cash, creditCard, lineOfCredit, plus off-budget asset/liability/loan types).",
+          "Category ↔ category-group is a strict one-to-many; system categories ('Inflow: Ready to Assign', per-card payment categories) must be flagged internal/system, non-deletable, and not directly editable. Support move-money-between-categories as a net-zero first-class operation.",
+          "Treat goals and Age of Money as derived/advisory layers computed from the core grid and transaction history, not as things that move money."
+        ],
+        "sources": [
+          "https://api.ynab.com/v1 (YNAB API v1 endpoints/schema)",
+          "https://raw.githubusercontent.com/ynab/ynab-sdk-ruby/main/docs/Category.md (Category model: budgeted, activity, balance = budgeted+activity, goal fields, milliunits)",
+          "https://raw.githubusercontent.com/ynab/ynab-sdk-ruby/main/docs/MonthDetail.md (month, income, budgeted, activity, to_be_budgeted, age_of_money)",
+          "https://raw.githubusercontent.com/ynab/ynab-sdk-ruby/main/docs/TransactionDetail.md (amount sign/milliunits, transfers, subtransactions)",
+          "https://raw.githubusercontent.com/ynab/ynab-sdk-ruby/main/docs/Account.md (account types, on_budget, balance)",
+          "https://www.ynab.com/blog/master-your-monthly-rollovers (positive balance carryover; cash vs credit overspending at rollover; RTA impact)",
+          "https://www.ynab.com/blog/what-is-a-zero-based-budget (zero-based budgeting definition)",
+          "https://support.ynab.com/en_us/overspending-in-ynab-a-guide-ryWoxEyi (overspending handling)",
+          "https://support.ynab.com/en_us/credit-card-overspending-an-overview-HkMGpSbJs (credit card overspending)",
+          "https://support.ynab.com/en_us/handling-credit-cards-overview-ry7cNub1s (Credit Card Payment category mechanics)",
+          "https://support.ynab.com/en_us/when-the-month-rolls-over-a-guide-rkyyd6qC9 (monthly rollover)",
+          "https://www.makingyourmoneymatter.com/ynab-tutorial-part-ii-budgeting-basics/ (credit card payment category earmarking; payment category available = payable portion)",
+          "https://overboredlife.com/ynab-method-explained/ (four rules, Ready to Assign, moving money)"
+        ]
+      },
+      {
+        "dimension": "YNAB Feature Surface Beyond the Core Budget (accounts, transactions, scheduling, targets, reports, import, currency, payees)",
+        "summary": "Beyond the \"assign every dollar a job\" envelope budget, YNAB is built on a small set of tightly-coupled subsystems: an account layer (on-budget \"Budget\" accounts, off-budget \"Tracking\" accounts, and Loan accounts) that feeds both the budget and net worth; a transaction layer with splits, paired transfers, payees, memos, six flag colors, a three-state cleared lifecycle (uncleared → cleared → reconciled/locked), and a separate approved/unapproved import gate; a reconciliation flow that compares YNAB's cleared balance to the bank and can post a balance-adjustment transaction; scheduled/recurring transactions with ~13 frequency options; and five Target (goal) types that drive category funding math. Rounding this out are five reports (Net Worth, Spending Breakdown, Spending Trends, Income v Expense, Age of Money), two import paths (Direct/linked bank import and file-based CSV/OFX/QFX import), payee management with renaming rules and per-payee auto-categorization, and a deliberately single-currency-per-budget model. A faithful v1 clone must nail accounts, transactions (splits/transfers), credit-card payment handling, reconciliation, and 2-3 target types; direct bank import, Age of Money, and multi-currency are the safest things to defer. The data model is concrete and worth copying: money is stored in integer milliunits, transfers are two linked rows, and splits are a parent with subtransactions.",
+        "key_findings": [
+          {
+            "point": "Three account categories: Budget (on-budget), Tracking (off-budget), Loan",
+            "detail": "AccountType enum values: checking, savings, cash, creditCard, lineOfCredit (Budget/on-budget); otherAsset, otherLiability (Tracking/off-budget); mortgage, autoLoan, studentLoan, personalLoan, medicalDebt, otherDebt (Loan). Each account has on_budget and closed booleans plus balance, cleared_balance, uncleared_balance (all milliunits). On-budget accounts feed the budget AND net worth; tracking accounts feed ONLY net worth (inflows don't add to Ready-to-Assign, outflows don't come from the budget). Loan accounts model debt payoff. Source: YNAB API spec + Account Types overview.",
+            "priority": "core"
+          },
+          {
+            "point": "Credit cards are on-budget with automatic payment-category handling",
+            "detail": "A credit card is a budget account whose balance is normally negative (debt). When you spend from a categorized credit-card transaction, YNAB automatically moves the budgeted amount from the spending category into an auto-created 'Credit Card Payment' category, so the money to pay the card is set aside. Paying the card is a transfer from checking to the credit-card account. This coupling is central to YNAB's method and must be modeled explicitly, not bolted on.",
+            "priority": "core"
+          },
+          {
+            "point": "Transaction core: date, payee, category, memo, amount, account",
+            "detail": "Amounts stored as integer milliunits (dollar value x 1000) to avoid float errors. Every transaction references an account and (unless split/transfer) a category and payee. Memo is free text. This is the atomic unit of the whole app. Source: YNAB API TransactionDetail.",
+            "priority": "core"
+          },
+          {
+            "point": "Split transactions: one transaction across multiple categories/payees",
+            "detail": "Modeled as a parent transaction with category_id = null and a subtransactions[] array; each subtransaction has its own amount/category/payee/memo and the amounts must sum to the parent. A split line can itself be a transfer. Web search 'Category: Split'. Source: Split Transactions guide + API subtransactions.",
+            "priority": "core"
+          },
+          {
+            "point": "Transfers between accounts create a linked transaction pair",
+            "detail": "A transfer is two mirrored rows (one outflow, one inflow) linked by transfer_account_id / transfer_transaction_id; editing/deleting one updates the other. Transfers between two on-budget accounts are budget-neutral (no category). Transfers to/from a tracking account, or a credit-card payment, are handled specially. Each account exposes a transfer_payee_id so transfers appear as a payee. Source: Transfer Transactions guide + API.",
+            "priority": "core"
+          },
+          {
+            "point": "Cleared lifecycle is a 3-value enum; reconciled is locked",
+            "detail": "TransactionClearedStatus = uncleared | cleared | reconciled. Cleared (green C) = posted at bank; reconciled shows a lock icon and is protected from accidental edits. This is separate from the 'approved' boolean. Source: go-ynab enum + Colors and Icons in the Register.",
+            "priority": "core"
+          },
+          {
+            "point": "approved/unapproved is a distinct import-review gate",
+            "detail": "Imported (and scheduled-entered) transactions land as unapproved so the user reviews payee/category before they're finalized; approved is a boolean defaulting to false when not supplied via API. Matching logic pairs an imported transaction to an existing manual one. Needed only if you build import; still worth modeling the boolean. Source: Approving and Matching guide + API.",
+            "priority": "important"
+          },
+          {
+            "point": "Six flag colors plus none, for color-coding",
+            "detail": "TransactionFlagColor = red, orange, yellow, green, blue, purple (plus 'none'/null). Purely organizational; used for filtering/reporting. Newer YNAB also lets flags be named. Source: go-ynab FlagColor enum.",
+            "priority": "nice-to-have"
+          },
+          {
+            "point": "Reconciliation flow compares YNAB cleared balance to real bank balance",
+            "detail": "User clicks Reconcile, confirms/enters the bank's current balance; matching transactions get marked reconciled (locked). If YNAB's cleared balance != bank balance, YNAB offers 'Create Adjustment & Finish', posting a Reconciliation Balance Adjustment transaction to force alignment. Starting-balance transaction seeds a new account. Source: Reconciling Accounts guide + Balance Adjustments guide.",
+            "priority": "core"
+          },
+          {
+            "point": "Scheduled / recurring transactions with ~13 frequencies",
+            "detail": "ScheduledTransactionFrequency = never, daily, weekly, everyOtherWeek, twiceAMonth, every4Weeks, monthly, everyOtherMonth, every3Months, every4Months, twiceAYear, yearly, everyOtherYear. Upcoming ones show in the register and 'Age of Money'/future-income planning; user can 'Enter Now' or auto-enter on date, edit/delete a single occurrence or the whole series. Source: go-ynab ScheduledFrequency enum + Scheduled Transactions guide.",
+            "priority": "important"
+          },
+          {
+            "point": "Five Target (goal) types drive category funding math",
+            "detail": "goal_type enum: MF = Monthly Funding ('needed for spending', fund X every month, don't roll over); NEED = Plan Your Spending, which spans weekly / monthly / by-a-specific-date variants with 'Set aside another X' (refund the full amount each period) vs 'Refill up to X' (only replace what was spent) behaviors; TB = Target Category Balance ('have a balance of X', save once and hold); TBD = Target Category Balance by Date (save X by date, YNAB computes monthly contribution). Category exposes goal_target, goal_target_month, goal_percentage_complete, goal_under_funded. Source: YNAB Targets guide + API goal fields.",
+            "priority": "core"
+          },
+          {
+            "point": "Five reports: Net Worth, Spending Breakdown, Spending Trends, Income v Expense, Age of Money",
+            "detail": "Net Worth = assets minus debts, month by month (uses all accounts incl. tracking). Spending Breakdown = pie of spend by category/group with %. Spending Trends = totals over time. Income v Expense = inflow vs outflow per month with averages/totals. Age of Money = avg days between earning a dollar and spending it (FIFO buffer metric). All are derived/aggregate views over the transaction+account data. Source: YNAB Reports blog + support pages.",
+            "priority": "important"
+          },
+          {
+            "point": "Age of Money is a derived buffer metric, not stored data",
+            "detail": "Computes how many days, on average, elapse between receiving money and spending it (FIFO matching of outflows to prior inflows). Signature YNAB metric but expensive to reproduce faithfully and non-essential to budgeting mechanics. Source: Age of Money guide.",
+            "priority": "nice-to-have"
+          },
+          {
+            "point": "Two import paths: Direct (linked bank) import and File-based import",
+            "detail": "Direct Import links a bank via an aggregator to auto-pull transactions/balances (heavy third-party integration, ongoing maintenance). File-based import = drag-and-drop CSV/OFX/QFX; CSV needs specific columns (Date, Payee, Memo, Amount or Outflow/Inflow). Both use an import_id to de-duplicate re-imported rows. For a clone, file/CSV import is achievable; direct bank import is a large external dependency. Source: File-Based Import guide + CSV Formatting overview + Direct Import.",
+            "priority": "important"
+          },
+          {
+            "point": "Payee management: renaming rules + per-payee auto-categorization",
+            "detail": "Manage Payees lets you edit, combine, delete payees. Renaming rules normalize messy bank payee strings on future imports (rules are case-sensitive). Setting a category on a payee auto-applies it to future imported transactions from that payee. This is YNAB's main automation and materially reduces categorization effort. Source: Rename Payees + Manage Payees + Categorizing Transactions guides.",
+            "priority": "important"
+          },
+          {
+            "point": "Single currency per budget; no native multi-currency",
+            "detail": "A YNAB budget is locked to one currency; all accounts must share it. YNAB's official guidance for multiple currencies is to create separate budgets, because floating exchange rates make mixing dangerous. Multi-currency exists only via third-party plugins/tools. For a clone, treat currency as a budget-level setting and de-scope conversion. Source: Using Multiple Currencies guide + YNAB blog.",
+            "priority": "nice-to-have"
+          },
+          {
+            "point": "Off-budget tracking accounts + net worth are separable from the budget engine",
+            "detail": "Tracking accounts (investments, mortgage, property) never touch Ready-to-Assign; they exist to make Net Worth accurate. A v1 could ship budget accounts only and add tracking accounts + net worth later without reworking the budget core.",
+            "priority": "important"
+          }
+        ],
+        "architecture_implications": [
+          "Store all monetary amounts as integer milliunits (dollars x 1000), never floats, to match YNAB and avoid rounding drift across budget/report aggregations.",
+          "Model an Account.on_budget boolean that gates budget participation: on-budget accounts contribute to Ready-to-Assign and category math; off-budget/tracking accounts contribute only to Net Worth. Keep account type as an enum with three behavioral classes (budget, tracking, loan).",
+          "Implement transfers as two linked transaction rows referencing each other (transfer_account_id + transfer_transaction_id); enforce that create/update/delete propagates to the paired row, and that on-budget-to-on-budget transfers carry no category.",
+          "Implement splits as a parent transaction with category_id = null plus a subtransactions collection whose amounts must sum to the parent; allow a subtransaction to be a transfer.",
+          "Credit-card accounts require automatic movement of budgeted funds into a system-managed 'Credit Card Payment' category on categorized card spending — build this coupling into the budget engine from day one rather than as a report-time calculation.",
+          "Represent cleared state as a 3-value enum (uncleared/cleared/reconciled) and lock reconciled rows against edits; keep a SEPARATE approved boolean for the import-review gate.",
+          "Reconciliation needs: a per-account cleared-balance computation, a flow to enter the bank balance, bulk-mark matched rows reconciled, and the ability to post a balance-adjustment transaction to force alignment. Seed each account with a starting-balance transaction.",
+          "Targets/goals belong on the category as a goal_type enum (MF/NEED/TB/TBD/DEBT) plus goal_target, goal_target_month, and behavior flag (set-aside vs refill); the funding-needed and percentage-complete values are derived per budget month, not stored.",
+          "Scheduled transactions need a recurrence engine supporting ~13 named frequencies and single-occurrence vs whole-series edits, plus a materialization step that emits real (unapproved) transactions on the due date.",
+          "Reports are read-only aggregations over transactions+accounts; design them as derived queries. Net Worth spans all accounts; budget-facing reports use only on-budget accounts. Age of Money requires FIFO matching of outflows to prior inflows and can be deferred.",
+          "Imports need an import_id (deterministic hash of bank fields) for idempotent de-duplication and a matching step against existing manual transactions; file/CSV import is a bounded feature, direct bank import is a large external aggregator dependency to defer.",
+          "Payee is a first-class entity (not a string on the transaction) so you can support renaming rules and per-payee default categories; store rename rules and a payee.default_category to drive auto-categorization on import.",
+          "Currency is a budget-level attribute with a single value; do not build cross-currency conversion into v1 — separate budgets per currency mirrors YNAB's own model."
+        ],
+        "sources": [
+          "https://support.ynab.com/en_us/account-types-an-overview-BkmGM0qCq",
+          "https://www.ynab.com/blog/the-how-and-why-of-tracking-accounts",
+          "https://support.ynab.com/en_us/split-transactions-a-guide-SJLEKwY0q",
+          "https://support.ynab.com/en_us/transfer-transactions-a-guide-HJOsZz4Jj",
+          "https://support.ynab.com/en_us/colors-and-icons-in-your-account-register-Hk_w6UBki",
+          "https://support.ynab.com/en_us/approving-and-matching-transactions-a-guide-ByYNZaQ1i",
+          "https://support.ynab.com/en_us/reconciling-accounts-a-guide-BJFE3fHys",
+          "https://support.ynab.com/en_us/balance-adjustments-a-guide-rko4OwILs",
+          "https://support.ynab.com/en_us/the-starting-balance-an-overview-H1uozOfJs",
+          "https://support.ynab.com/en_us/scheduled-transactions-a-guide-BygrAIFA9",
+          "https://www.ynab.com/blog/ynab-targets",
+          "https://support.ynab.com/en_us/how-to-use-targets-rk5kkI9ks",
+          "https://www.ynab.com/blog/ynab-reports-and-data",
+          "https://support.ynab.com/en_us/age-of-money-report-a-guide-H1ZS84W1s",
+          "https://support.ynab.com/en_us/net-worth-BkwQO5WA5",
+          "https://support.ynab.com/en_us/spending-breakdown-H1H7YxmD0",
+          "https://support.ynab.com/en_us/income-v-expense-Byu1BYWRq",
+          "https://support.ynab.com/en_us/file-based-import-a-guide-Bkj4Sszyo",
+          "https://support.ynab.com/en_us/how-direct-import-works-H1IGYLgnxl",
+          "https://support.ynab.com/en_us/formatting-a-csv-file-an-overview-BJvczkuRq",
+          "https://support.ynab.com/en_us/using-multiple-currencies-in-ynab-a-guide-SyBF6PHno",
+          "https://support.ynab.com/en_us/how-to-rename-payees-BkotNUSyo",
+          "https://www.ynab.com/blog/manage-payees",
+          "https://support.ynab.com/en_us/categorizing-transactions-a-guide-HyRl60sks",
+          "https://pkg.go.dev/go.bmvs.io/ynab/api/transaction",
+          "https://github.com/ynab/ynab-sdk-ruby/blob/main/open_api_spec.yaml",
+          "https://api.ynab.com/papi/open_api_spec.yaml"
+        ]
+      },
+      {
+        "dimension": "Mobile expense-capture experience — YNAB's mobile app + best practices for sub-10-second on-the-go entry, and the minimal companion-app feature set",
+        "summary": "YNAB's mobile app treats fast capture as a first-class problem: the core register entry is amount-first, with only the amount truly required and payee/category/date/memo/flag all optional or auto-defaulted, and it layers three shortcuts on top — home-screen/lock-screen widgets that pre-select a category so you only type an amount, an Android app-icon long-press that jumps straight to the new-transaction screen, and iOS Siri Shortcuts for one-tap repeat transactions. Across the broader market, the fastest manual flows hit ~5 seconds by defaulting everything and letting AI/smart-tags infer the category from payee history; voice (\"twelve bucks coffee\") and receipt OCR are the other fast-input paths. The most automated capture is not manual at all: iOS 17+ exposes a Wallet \"Transaction\" personal-automation trigger that fires on in-store Apple Pay tap-to-pay and passes card, merchant, and amount (Run Immediately = no confirmation), while Android apps parse bank SMS directly; iOS blocks SMS access so apps read bank push notifications instead, which is lossier. The unavoidable UX truth is that no manual field beyond amount can be mandatory if the target is under 10 seconds at a checkout — everything else must be defaulted, inferred, or deferred to a later \"approve/categorize\" pass. The minimal companion feature set is therefore: an amount-first quick-add that opens in one tap (widget + long-press + Siri), sane defaults (today's date, last/most-likely category, uncleared), offline-first local write with background sync, and a lightweight later-review queue; receipt capture and payment-notification auto-capture are valuable but secondary to the 3-second amount keypad.",
+        "key_findings": [
+          {
+            "point": "YNAB entry is amount-first; only amount is effectively required",
+            "detail": "In the YNAB mobile new-transaction screen the numeric amount is the primary/first field and the only one that must be filled; payee, category, date, memo, flag and cleared status are optional. Date defaults to today and cleared defaults to uncleared, so a valid transaction can be one number + save. This 'default everything, require the amount' pattern is the backbone of fast entry (support.ynab.com how-to-add-transactions).",
+            "priority": "core"
+          },
+          {
+            "point": "Widgets pre-select the category so you only enter the amount",
+            "detail": "YNAB home-screen widgets (iOS 14+/Android 7+, multiple sizes; up to 7 favorite categories on iOS, scrollable on Android) show frequently-used category balances. Tapping a category opens YNAB with that category already selected, waiting only for the amount. This collapses the flow to tap-widget-category → type amount → save, the single biggest lever for sub-10s capture (support.ynab.com ynab-widget-for-mobile-a-guide).",
+            "priority": "core"
+          },
+          {
+            "point": "Android app-icon long-press launches new-transaction directly; iOS uses Siri Shortcuts",
+            "detail": "Long-pressing the YNAB icon on Android exposes a quick action that jumps straight into the transaction-entry screen, skipping app navigation (ynab.com blog 'pressing news'). On iOS, YNAB ships Siri Shortcuts that let you pre-build a repeated transaction ('Coffee') and log it by voice or one tap without re-entering details (support.ynab.com shortcuts-on-ios-a-guide). Both are OS-level fast-open entry points rather than in-app screens.",
+            "priority": "core"
+          },
+          {
+            "point": "Fastest market manual flows target ~5 seconds via defaults + inferred category",
+            "detail": "Modern trackers advertise ~5-second add: open → plus → amount → smart-tag auto-suggests category from history → save. The consistently cited best practice is to log at the point of spend ('still at the register, still holding the receipt') and to make it a two-second habit, which only works if category selection is inferred rather than required (nerdwallet, moneypatrol, receiptsai).",
+            "priority": "core"
+          },
+          {
+            "point": "iOS 17+ Wallet 'Transaction' automation auto-captures Apple Pay tap-to-pay",
+            "detail": "A Personal Automation trigger (Automation → New → Transaction; renamed 'Wallet' in iOS 26) fires on in-store tap-to-pay and passes card, merchant/store, and amount to the next action. Set to 'Run Immediately' it logs with zero confirmation. Key limits: in-store NFC only — online Apple Pay does not trigger it — and it routes through Shortcuts, not a private bank API (Apple support transaction-trigger; getfinny apple-pay/shortcuts articles; TravelSpend help).",
+            "priority": "important"
+          },
+          {
+            "point": "SMS/notification auto-capture: strong on Android, degraded on iOS",
+            "detail": "Android apps read bank transaction SMS directly and regex-parse amount, debit/credit, account, timestamp, reference, and running balance. iOS forbids third-party SMS inbox access, so apps (e.g. FinArt) read bank push notifications instead — less granular and format-dependent. Merchant→category mapping works for named merchants ('SWIGGY') but fails on opaque descriptors ('POS TERMINAL 4523'), so a manual/AI categorization fallback is always needed (getfinny sms-expense-tracking-app).",
+            "priority": "important"
+          },
+          {
+            "point": "Deferred/two-pass model: capture now, categorize/approve later",
+            "detail": "YNAB's own model separates capture from cleanup — imported/auto-created transactions land in an 'approve/match' queue and reconciliation is a distinct later step (support.ynab.com approving-and-matching, reconciling-accounts). Design implication for speed: at checkout capture only amount (+ optional payee); push payee-cleanup, category correction, memo, and splits to a batched review screen at home.",
+            "priority": "core"
+          },
+          {
+            "point": "Voice and receipt OCR are secondary fast-input paths",
+            "detail": "Voice entry lets users speak 'twelve bucks coffee' and have amount/merchant/category parsed; receipt scanning (e.g. Finny's batch snap-and-log of up to 5 photos) OCRs merchant, total, date, and category. Both are faster than typing for some users but require review and are less reliable than a plain amount keypad, so they belong as optional inputs, not the primary path (getfinny; bill.com receipt-scanner roundup).",
+            "priority": "nice-to-have"
+          },
+          {
+            "point": "Offline-first entry with background sync is expected baseline",
+            "detail": "Checkout environments have poor connectivity, so entry must write to local storage instantly and sync in the background; YNAB support frames sync/reconcile as separate reliability concerns rather than blocking entry. A capture app must never block 'save' on a network round-trip (support.ynab.com the-ynab-app, troubleshooting).",
+            "priority": "core"
+          },
+          {
+            "point": "Notifications are used for reminders/nudges, not primarily for capture on YNAB",
+            "detail": "YNAB leans on widgets, long-press, and Shortcuts for capture; push notifications serve reminders/approvals. The notification-as-capture idea is realized elsewhere via OS payment triggers (Apple Wallet) and Android notification reading rather than in-app alerts. For a companion app, a 'you just spent X — categorize?' notification tied to the Wallet trigger is the highest-value notification type.",
+            "priority": "important"
+          },
+          {
+            "point": "Lock-screen and hardware entry points shorten time-to-keypad",
+            "detail": "iOS lock-screen widgets, the Action Button (iPhone 15 Pro+), NFC tags, and Back Tap can all be wired via Shortcuts to open an expense entry action without unlocking into the app. These trim the 'get to the amount field' latency that dominates sub-10s budgets (getfinny apple-shortcuts-automations).",
+            "priority": "nice-to-have"
+          }
+        ],
+        "architecture_implications": [
+          "Amount field must be the app's single required input and the immediately-focused control on entry — numeric keypad up on launch, everything else optional and defaulted. Do not gate 'save' on payee/category.",
+          "Provide at least three OS-level fast-open surfaces so users never navigate the app to capture: a home/lock-screen widget with pre-selected favorite categories (tap category → amount → save), an app-icon long-press / App Shortcut to jump straight to new-transaction, and a Siri/Shortcuts action for repeat transactions.",
+          "Offline-first is mandatory: write transactions to a local store synchronously and reconcile with the server via a background sync queue; the entry UI must confirm 'saved' from local state, independent of connectivity.",
+          "Split the workflow into capture (checkout, amount-only) and review (later, batched): implement an 'approve/categorize' inbox where deferred fields — corrected payee, category, split, memo, cleared status — are filled in one sweep, mirroring YNAB's approve/match + reconcile separation.",
+          "Category selection must be inferred, not required: default to the most-likely category (last-used for that payee, or the widget-tapped category) with easy one-tap correction later, backed by payee→category history.",
+          "Default the boring fields at write time: date = now, cleared = uncleared/pending, account = a configurable default; expose a payee autocomplete but never block on it.",
+          "Auto-capture is a bonus pipeline, platform-forked: on iOS integrate the Wallet/Transaction personal-automation trigger (card + merchant + amount, in-store tap-to-pay only, Run Immediately) feeding the review inbox; on Android optionally parse bank SMS/notifications. Neither can be the sole path — both need the manual amount-first fallback and a categorization step.",
+          "Treat receipt OCR and voice as optional secondary inputs that populate the same draft-transaction/review model, not as the primary entry flow, since both require confirmation and add latency at the register.",
+          "Notifications should be capture-adjacent nudges: a post-payment 'categorize this' prompt (tied to the OS payment trigger) and a periodic 'review N uncategorized' reminder, rather than the entry mechanism itself.",
+          "Keep the data model tolerant of partial transactions (amount-only, unmatched payee, uncategorized, pending) so a 3-second capture is always a valid, first-class record that can be enriched later."
+        ],
+        "sources": [
+          "https://support.ynab.com/en_us/how-to-add-transactions-in-ynab-HyDwA_byi",
+          "https://support.ynab.com/en_us/ynab-widget-for-mobile-a-guide-HJPEEQYR9",
+          "https://www.ynab.com/blog/widgets-for-ynab-on-ios",
+          "https://www.ynab.com/blog/pressing-news-ynabs-android-app-has-long-press-functionality",
+          "https://support.ynab.com/en_us/shortcuts-on-ios-a-guide-Bk_lHa5Aq",
+          "https://support.ynab.com/en_us/approving-and-matching-transactions-a-guide-ByYNZaQ1i",
+          "https://support.ynab.com/en_us/reconciling-accounts-a-guide-BJFE3fHys",
+          "https://support.ynab.com/en_us/the-ynab-app-SyP94gTjkx",
+          "https://support.apple.com/guide/shortcuts/transaction-trigger-apd65c67538a/ios",
+          "https://getfinny.app/blog/apple-shortcuts-expense-tracking-automations-2026",
+          "https://getfinny.app/blog/best-apps-track-apple-pay-spending-2026",
+          "https://getfinny.app/blog/sms-expense-tracking-app",
+          "https://help.travel-spend.com/shortcuts--automation/ignQHsp85RQDsig2QwVcdX/set-up-apple-pay-automation/7tL8XfjBceg4D7mQeiSK2V",
+          "https://www.nerdwallet.com/finance/learn/best-budget-apps",
+          "https://moneypatrol.com/moneytalk/budgeting/best-app-to-keep-track-of-expenses-start-in-under-10-minutes/",
+          "https://receiptsai.com/blog/10-time-saving-tips-for-small-business-expense-tracking/",
+          "https://www.bill.com/blog/best-receipt-scanning-app"
+        ]
+      },
+      {
+        "dimension": "Conflict resolution for a local-first, peer-to-peer, multi-device shared budget (financial/ledger data)",
+        "summary": "A shared local-first budget has two data populations with opposite conflict semantics, and conflating them is the core mistake. Recorded money movements (transactions) are immutable historical facts and must be modeled as an append-only, event-sourced log keyed by client-generated UUIDs — never as mutable last-write-wins (LWW) fields, because LWW on an amount is a structural lost-update that silently destroys money. Budget-plan state (category-by-month assignments, category-to-category moves) is intentionally revisable and merges cleanly if modeled as commutative deltas (move/assignment events, i.e. an operation-based counter) rather than absolute LWW cells. The critical realization is that the two headline invariants — \"Ready to Assign = 0\" and \"category balance >= 0\" — are GLOBAL invariants that provably cannot be enforced at merge time from local-only information without coordination; the correct design recomputes them deterministically as projections over the merged log and surfaces violations as displayed warning states (exactly as YNAB already tolerates negative Ready-to-Assign and red category balances), rather than trying to block or auto-repair merges. Actual Budget is the canonical proof point: it runs a hand-rolled per-field LWW CRDT over SQLite with hybrid-logical-clock (HLC) timestamps, an append-only messages_crdt log, and Merkle-tree diffing for sync. Field-level LWW is fine for descriptive metadata (payee, memo) but should not govern the ledger's numeric truth, which comes from summing immutable postings.",
+        "key_findings": [
+          {
+            "point": "Naive LWW on money is a lost-update by construction, not just a merge nuisance",
+            "detail": "Last-Write-Wins resolves a same-field conflict by keeping the highest-timestamp value and discarding the other, which is precisely a structural lost update. For a transaction amount or a category balance, two offline peers editing concurrently means one edit (real money) is silently dropped with no error. LWW is acceptable for descriptive fields (payee, memo, cleared flag) but must never be the arbiter of ledger totals. Sources confirm LWW 'is a structural lost update by design' and is specifically dangerous for financial transfers/high-contention data.",
+            "priority": "core"
+          },
+          {
+            "point": "Model recorded transactions as an immutable, append-only event log keyed by UUID — edits/deletes are new events, not in-place mutation",
+            "detail": "Event sourcing mirrors double-entry accounting: state is the fold of an append-only sequence of immutable facts (a balance is the sum of all postings). A transaction is created once with a client-generated UUID; a later 'edit' emits a correcting/superseding event and a 'delete' emits a tombstone event. This is append-only + immutable, which is inherently commutative and conflict-free to merge (union of events), preserves a full audit trail, and never overwrites an amount. Actual Budget stores every change in an append-only messages_crdt table and rebuilds normal SQLite tables from it.",
+            "priority": "core"
+          },
+          {
+            "point": "Never store Ready-to-Assign or category balances as authoritative numbers — compute them as deterministic projections over the merged state",
+            "detail": "If derived totals are stored as mutable fields, offline peers will merge inconsistent numbers. Instead treat them as pure functions: category_balance(cat, month) = assigned(cat,month) + rollover_from_prior − sum(cleared+uncleared postings to cat in month); Ready_to_Assign = sum(income inflows) − sum(all assignments). Because these are recomputed identically on every replica after the logs converge, the invariants become automatically consistent post-merge with zero repair logic. This is the single most important modeling decision.",
+            "priority": "core"
+          },
+          {
+            "point": "'Ready to Assign = 0' and 'balance >= 0' are GLOBAL invariants that cannot be enforced at merge time without coordination — treat them as displayed states, not merge constraints",
+            "detail": "A non-negative-counter constraint is a global invariant that 'cannot be evaluated based on local information only' (CRDT literature). Two partners can each legitimately assign the last $100 while offline; no local merge rule can prevent the resulting over-assignment without central coordination, which contradicts the P2P/offline goal. The pragmatic and correct answer matches YNAB's own product behavior: allow negative Ready-to-Assign and negative category balances, compute them after merge, and surface them as red/warning states for a human to reconcile. Do NOT auto-clamp or drop assignments to force the invariant.",
+            "priority": "core"
+          },
+          {
+            "point": "Model the budget-assignment grid and category-to-category moves as commutative delta/counter operations, not absolute LWW cells",
+            "detail": "A budget 'move $50 from Groceries to Dining' should be a first-class two-legged event (−50 Groceries, +50 Dining) that sums to zero — pure double-entry. Represented as deltas, two concurrent moves both apply and converge (operation-based counter / Automerge Counter semantics: concurrent increments correctly sum to the total rather than one clobbering the other). If assignment cells are instead absolute LWW registers ('set Groceries to $200'), two concurrent sets lose one intent. Deltas preserve both partners' actions; the recomputed RTA then reflects reality (possibly negative), which is honest.",
+            "priority": "core"
+          },
+          {
+            "point": "Automerge/PN counters correctly sum concurrent increments but cannot enforce bounds or serve as keys",
+            "detail": "Automerge's Counter tracks each increment/decrement independently and sums them at merge (A:+2, B:+3 → 8, not a conflicting 5/6). A PN-counter = two grow-only counters (increments, decrements) netted. These are the right primitive for aggregate deltas (rollups, assignment sums) but the docs explicitly warn they must not generate keys (collisions) and they carry no non-negativity guarantee. So: use counter semantics for the plan-layer deltas, but keep audit-bearing money as discrete UUID'd postings you can enumerate, not an opaque counter.",
+            "priority": "important"
+          },
+          {
+            "point": "Use Hybrid Logical Clocks (HLC) for causal ordering and tie-breaking, plus a node-id tiebreak for determinism",
+            "detail": "Actual Budget's timestamps look like 2019-06-03T16:40:53.876Z-0000-9f66d38cba0ef956 = wall-clock + same-millisecond counter + globally-unique node id. HLCs are causality-preserving yet close to real time, and the node id guarantees a total, deterministic order so every replica breaks ties identically. This is what makes any residual per-field LWW (on metadata) converge deterministically, and it timestamps log events for ordering the projection fold.",
+            "priority": "important"
+          },
+          {
+            "point": "Idempotency and dedup require a persisted client-generated key with a unique index — not an in-memory set",
+            "detail": "Every posting carries a client-generated UUID/idempotency key persisted behind a unique constraint before processing; a re-delivered event is recognized as a duplicate and skipped. The source of truth for 'seen this transaction' must be the durable store, because on a fresh process an in-memory dedup map is empty until replay finishes and a mid-replay duplicate would slip through. For bank imports (no stable UUID), dedup on a fingerprint (FIT-ID / date+amount+payee+account) to avoid double-importing the same real-world transaction from two devices.",
+            "priority": "important"
+          },
+          {
+            "point": "Field-level (not row-level) LWW granularity limits, but does not eliminate, conflict damage",
+            "detail": "Actual updates at field granularity: a transaction's payee and amount are separate CRDT messages, so concurrent edits to different fields of the same row merge without conflict. This is a good default for the descriptive/mutable columns. But field-level LWW on the amount column still loses one concurrent value — which is why the amount's truth should come from the immutable posting event, and mutable descriptive fields are the only ones left under LWW.",
+            "priority": "important"
+          },
+          {
+            "point": "Bounded-counter / escrow reservation CAN enforce hard non-negative invariants, but reintroduces coordination — usually overkill for a 2-person budget",
+            "detail": "Rich-CRDTs (ElectricSQL) implement bounded counters via escrow: pre-allocate a share of the 'budget' to each node so each can locally validate spends without coordinating, falling back to peer coordination only when its reserve is exhausted. This genuinely preserves 'never oversell', but it requires online peer coordination at the boundary and static/heuristic allocation — a poor fit for two frequently-offline phones where displayed reconciliation is cheaper and more honest than a distributed reservation protocol.",
+            "priority": "nice-to-have"
+          },
+          {
+            "point": "Merkle-tree diffing makes P2P sync of the append-only log efficient",
+            "detail": "Actual maintains a Merkle tree over its message log so two peers can quickly compare and identify (roughly) which messages are missing on each side, exchanging only the delta rather than the whole log. This is the practical mechanism for pairwise phone-to-phone/laptop sync without a server.",
+            "priority": "nice-to-have"
+          },
+          {
+            "point": "Handle transaction edits/voids as accounting corrections, preserving double-entry sum-to-zero and append-only postings",
+            "detail": "A correct ledger enforces architectural invariants — double-entry postings that sum to zero and append-only (never mutate a posted entry). Reversing a transaction is a new reversing entry, not deletion. This keeps every replica's fold reproducible and auditable and dovetails with the immutable-log model; it also means merges never have to 'undo' anything, only append.",
+            "priority": "important"
+          }
+        ],
+        "architecture_implications": [
+          "Split the data model into two layers with different merge rules: (1) an immutable, append-only ledger of postings (money facts), and (2) a mutable plan layer (assignments/moves) modeled as commutative deltas. Do not let LWW govern either layer's numeric truth.",
+          "Every transaction is created once with a client-generated UUID; edits and deletes are new superseding/tombstone/reversing events. The ledger table is a projection rebuilt from this log, exactly like Actual's messages_crdt → SQLite pattern.",
+          "Make Ready-to-Assign and every category/account balance PURE DERIVED functions folded over the merged log. Store no authoritative aggregate. Recomputation after convergence gives free invariant consistency across replicas.",
+          "Do not enforce 'RTA = 0' or 'balance >= 0' as merge-time constraints — they are global invariants unattainable offline without coordination. Compute them, then display over-assignment / overspend as warning states (negative RTA, red categories) for human reconciliation, matching YNAB's own tolerated states.",
+          "Represent budget assignments and category-to-category moves as delta/counter operations (two-legged, sum-to-zero for moves) so concurrent partner actions both survive and sum, rather than absolute LWW cells where one intent is lost.",
+          "Timestamp every event with a Hybrid Logical Clock plus a unique node id (HLC = wall clock + counter + node id) to get causal ordering and a deterministic total tiebreak; reserve per-field LWW strictly for descriptive/metadata columns (payee, memo, flags).",
+          "Enforce idempotency with a durable unique index on the client-generated event key; add fingerprint-based dedup (FIT-ID / date+amount+payee+account) for bank-imported transactions that lack a shared UUID, since two devices may import the same statement.",
+          "Use Merkle-tree (or similar) log diffing for efficient pairwise P2P sync so devices exchange only missing events, not the whole history.",
+          "Treat CRDT counters (Automerge/PN) as the primitive for aggregate plan deltas only; keep individually auditable money as enumerable UUID'd postings, never collapsed into an opaque counter you cannot itemize.",
+          "Reserve escrow/bounded-counter (Rich-CRDT) machinery only if a HARD non-negative guarantee is ever required; accept that it reintroduces peer coordination, and prefer displayed reconciliation for the common 2-person, frequently-offline case."
+        ],
+        "sources": [
+          "https://archive.jlongster.com/using-crdts-in-the-wild",
+          "https://automerge.org/docs/reference/documents/counters/",
+          "https://electric.ax/blog/2022/05/03/introducing-rich-crdts",
+          "https://www.abstractalgorithms.dev/lost-update-database-anomaly",
+          "https://dzone.com/articles/conflict-resolution-using-last-write-wins-vs-crdts",
+          "https://github.com/clintharris/crdt-example-app_annotated/blob/master/NOTES.md",
+          "https://imfeld.dev/writing/crdts_for_mortals",
+          "https://www.youtube.com/watch?v=rEz3shZJtvI",
+          "https://support.ynab.com/en_us/when-ready-to-assign-is-negative-an-overview-HylZA0zCc",
+          "https://www.ynab.com/blog/master-your-monthly-rollovers",
+          "https://arxiv.org/pdf/1503.09052",
+          "https://www.bartoszsypytkowski.com/operation-based-crdts-registers-and-sets/",
+          "https://domaincentric.net/blog/event-sourcing-projection-patterns-deduplication-strategies",
+          "https://www.formance.com/blog/engineering/double-entry-accounting-for-engineers-building-financial-products",
+          "https://xvica.com/insights/five-invariants-of-a-correct-double-entry-ledger/",
+          "https://dev.to/dealeron/event-sourcing-and-the-history-of-accounting-1aah",
+          "https://evilmartians.com/chronicles/cool-front-end-arts-of-local-first-storage-sync-and-conflicts",
+          "https://github.com/automerge/hypermerge"
+        ]
+      },
+      {
+        "dimension": "On-device / local receipt OCR and lightweight AI for an offline, privacy-preserving mobile expense app",
+        "summary": "A fully offline \"snap a receipt -> prefilled amount + merchant + date\" flow is realistic today using only the OS-native OCR engines: Apple Vision (VNRecognizeText / VisionKit VNDocumentCameraViewController) on iOS and Google ML Kit Text Recognition v2 on Android. Both run 100% on-device, ship free with the platform, need no server, and handle high-contrast printed thermal receipts well (Vision ~72% vs Google Cloud's 91% on hard handwritten receipts, but far higher on clean printed text; ML Kit uses a CNN + sequence decoder locally). The hard problem is not OCR but parsing the recognized text into fields. For v1, do NOT ship a neural extraction model or line-item parser: capture the document with the native scanner (auto crop + perspective correction), run native OCR to get text lines with bounding boxes/confidence, then apply deterministic heuristics (largest currency value near a \"TOTAL\" keyword = total; date-format regexes = date; top-of-receipt largest/first text block = merchant) and always let the user correct the three fields. Merchant->category can start as a local lookup table/keyword map with learned per-user overrides, upgrading later to a small on-device TensorFlow Lite / Core ML text classifier if needed. The Basecamp desktop app should not be a required OCR dependency: keeping OCR fully on the phone preserves the offline/no-server guarantee; a desktop path only makes sense as an optional heavier reprocessor (e.g., Tesseract or a local vision model) for batch re-OCR of stored photos, not for the primary capture flow.",
+        "key_findings": [
+          {
+            "point": "iOS: use VisionKit document scanner + Vision text recognition, both fully on-device",
+            "detail": "VNDocumentCameraViewController gives the built-in camera UI that detects the receipt edges, does perspective correction and image enhancement for free; feed the captured image to VNRecognizeTextRequest (accurate recognition level, 40+ languages, hardware-accelerated, offline on every modern iPhone). Post-processing is required: high confidence != correct (e.g. 1.0 confidence still misreads TM as TN, or 1 3/4 as 13/4). This is the lowest-effort, highest-quality iOS path and needs no third-party dependency.",
+            "priority": "core"
+          },
+          {
+            "point": "Android: Google ML Kit Text Recognition v2 is the direct equivalent, on-device and free",
+            "detail": "Runs entirely on-device (no network call, no cloud billing, no privacy concern), CNN locates text regions + sequence decoder reads characters inside the ML Kit runtime. Recognizes Latin, Chinese, Devanagari, Japanese, Korean. Returns a hierarchy of Blocks -> Lines -> Elements(words) -> Symbols, each with bounding boxes, corner points, and confidence — exactly the geometry you need to associate a price with its label line. Pair with CameraX. Guidance: each character should be >=16x16 px; blur is the #1 OCR error cause, so enforce a sharpness/hold-still check before capture.",
+            "priority": "core"
+          },
+          {
+            "point": "The real v1 work is field extraction from OCR text, and simple heuristics beat ML here",
+            "detail": "For amount/merchant/date you do NOT need a model. Amount: scan OCR lines for currency-shaped tokens, prefer the value on/near a line containing TOTAL/AMOUNT DUE/BALANCE (and above TAX/CHANGE), and as a fallback take the largest monetary value — using the bounding-box column alignment to avoid grabbing subtotal/tax. Date: run a small battery of locale-aware date regexes (dd/mm/yyyy, mm/dd/yyyy, yyyy-mm-dd, dd Mon yyyy) and pick the first plausible in-range date. Merchant: the first 1-3 lines / largest-font top block is almost always the store name; normalize against a local known-merchant list. Keep every rule deterministic and offline.",
+            "priority": "core"
+          },
+          {
+            "point": "Always treat extracted fields as an editable prefill, never as final truth",
+            "detail": "OCR + heuristics will be wrong on a meaningful fraction of receipts (faded thermal paper, wrapped line items, foreign formats). The correct UX is: show the photo, prefill amount/merchant/date into editable fields, and let the user confirm/fix in one tap. This is what makes a heuristic v1 shippable — you trade rare parsing errors for a 3-second confirmation instead of chasing model accuracy. Capture the user's corrections; they are training data and the basis for per-merchant learning.",
+            "priority": "core"
+          },
+          {
+            "point": "iOS 26 Vision RecognizeDocumentsRequest can eventually replace hand-rolled parsing for line items",
+            "detail": "Introduced WWDC25 (developer.apple.com/videos/play/wwdc2025/272). Returns a DocumentObservation with structure: groups lines into paragraphs, detects tables/rows (explicitly 'rows in a receipt'), lists, and machine-readable codes, and auto-identifies data like prices, phone numbers, and addresses in 26 languages — all on-device. This dramatically reduces receipt-parsing code for line items on newer iPhones. Treat it as a progressive enhancement (iOS 26+), not the v1 baseline, since it won't exist on older iOS or on Android; Android has no exact equivalent.",
+            "priority": "important"
+          },
+          {
+            "point": "Merchant -> category: start with a local lookup, not a model",
+            "detail": "v1: ship a static keyword/merchant->category map (e.g. names containing 'CAFE/COFFEE/STARBUCKS' -> Food & Drink; 'SHELL/BP/EXXON' -> Fuel; 'UBER/LYFT' -> Transport) plus a per-user learned override table that remembers 'this merchant string -> the category you last chose'. This is offline, instant, explainable, and improves with use. Only if that proves insufficient, upgrade to an on-device text classifier: TensorFlow Lite (Model Maker / LiteRT) on Android or a Core ML text classifier on iOS, quantized to keep model size small and fast. ML Kit also supports swapping in a custom TFLite model.",
+            "priority": "important"
+          },
+          {
+            "point": "On-device OCR vs pushing heavier OCR to the Basecamp desktop app: keep OCR on the phone",
+            "detail": "Native mobile OCR is the privacy/offline win — nothing leaves the device and it works with no network. Tesseract on desktop is fast and tiny (~0.77s CPU, ~10MB binary, runs on a Raspberry Pi) and free, but its accuracy on real-world faded thermal receipts is poor (a finance team saw ~60% character-correct on German supermarket receipts). Modern vision/VLM models beat Tesseract on receipts/handwriting/bad photos but are heavy and slower. So a desktop model buys little quality over native mobile OCR for the primary flow while adding a sync dependency that breaks the 'works offline on the phone' guarantee. Recommendation: make desktop OCR optional — an opt-in batch re-processor (Tesseract fast-path, optional local vision-model fallback for low-confidence receipts) over photos already stored on device, never a required step.",
+            "priority": "important"
+          },
+          {
+            "point": "Cross-platform wrappers exist if the app is Flutter/React Native rather than fully native",
+            "detail": "Flutter has maintained plugins that bridge to the exact native engines: flutter_ocr_kit (Apple Vision on iOS + ML Kit on Android + ONNX Runtime for layout, all on-device), flutter_native_ocr, and google_mlkit_text_recognition. React Native has fewer turnkey options and typically needs a thin native module wrapping Vision/ML Kit. Either way the underlying engine and privacy story is identical to going native; the wrapper only saves platform glue code.",
+            "priority": "nice-to-have"
+          },
+          {
+            "point": "Image-quality gating is a cheap accuracy multiplier",
+            "detail": "Because blur is the dominant OCR failure and small text fails below ~16px/char, invest in capture quality rather than post-OCR cleverness: use the native document scanner's auto-edge-detection + perspective correction, require adequate resolution/zoom so characters are large, and reject blurry frames before OCR. This raises effective field-extraction accuracy more than any parsing tweak.",
+            "priority": "important"
+          },
+          {
+            "point": "Hybrid confidence-based fallback is the natural scaling path, still offline",
+            "detail": "Route by confidence: native on-device OCR handles the common clean printed receipt; flag low-confidence captures (faded/curled/handwritten) for either a retake prompt or, later, a heavier local model pass (on-device VLM, or the optional desktop reprocessor). This mirrors the documented hybrid pattern (Tesseract/native for high-confidence, vision model for hard cases) and keeps cost/complexity proportional to difficulty without a mandatory server.",
+            "priority": "nice-to-have"
+          }
+        ],
+        "architecture_implications": [
+          "Two-stage pipeline per platform: (1) native document capture (VNDocumentCameraViewController / CameraX) -> (2) native OCR (Vision VNRecognizeText / ML Kit Text Recognition v2) -> (3) shared deterministic field-extraction layer operating on OCR lines+bounding boxes. Keep stage 3 in shared cross-platform code so the amount/date/merchant heuristics are written once.",
+          "No network dependency in the capture-to-prefill path. OCR, parsing, and categorization all run locally, satisfying the privacy/no-server requirement; the app must be fully functional in airplane mode.",
+          "Persist the original receipt image plus the raw OCR output (text + bounding boxes + confidence), not just the parsed fields. This enables later re-parsing (e.g. when adopting iOS 26 RecognizeDocumentsRequest or a desktop reprocessor) without re-photographing, and supports the optional Basecamp desktop re-OCR path.",
+          "Model the extracted amount/merchant/date as user-editable prefilled values with a confirmation step; store user corrections as first-class data to feed per-merchant category learning and future accuracy tuning.",
+          "Categorization is a pluggable component: v1 = static merchant->category map + per-user learned override table (local key-value store); interface it so a quantized TFLite/Core ML classifier can be dropped in later without changing callers.",
+          "Platform capability branching: gate RecognizeDocumentsRequest behind iOS 26+ and fall back to VNRecognizeText+heuristics elsewhere; Android always uses ML Kit v2 + heuristics. Design the extraction interface to accept either 'flat OCR lines' or 'structured document' input.",
+          "Treat the Basecamp desktop app as an optional, opt-in heavier reprocessor over already-synced photos (Tesseract fast-path, optional local vision-model fallback), never as a required OCR dependency — otherwise the offline guarantee breaks.",
+          "Add a pre-OCR image-quality gate (blur/resolution check, character size >=16px) to reduce downstream parsing errors cheaply."
+        ],
+        "sources": [
+          "https://developer.apple.com/documentation/vision/recognizedocumentsrequest",
+          "https://developer.apple.com/videos/play/wwdc2025/272/",
+          "https://developer.apple.com/documentation/visionkit/vndocumentcameraviewcontroller",
+          "https://developer.apple.com/documentation/visionkit/datascannerviewcontroller",
+          "https://developers.google.com/ml-kit/vision/text-recognition/v2",
+          "https://atomicrobot.com/blog/mlkit-on-device-ocr-android/",
+          "https://fritz.ai/comparing-apples-and-google-s-on-device-ocr-technologies/",
+          "https://www.shawnbaek.com/posts/lets-make-a-receipt-text-recognizer-with-the-apple-vision-framework",
+          "https://www.andyibanez.com/posts/scanning-and-text-recognition-with-visionkit/",
+          "https://dev.to/gabrielanhaia/vision-models-for-ocr-when-they-beat-tesseract-and-when-they-dont-54a6",
+          "https://www.codesota.com/ocr/paddleocr-vs-tesseract",
+          "https://aimultiple.com/ocr-accuracy",
+          "https://ai.google.dev/edge/litert/libraries/modify/text_classification",
+          "https://medium.com/haptik-inc/offline-on-device-text-classification-using-mlkit-6e255c6e994e",
+          "https://github.com/robert008/flutter_ocr_kit",
+          "https://pub.dev/packages/flutter_native_ocr"
+        ]
+      }
+    ],
+    "synthesis": {
+      "feature_split": {
+        "basecamp": [
+          {
+            "feature": "Category-group / category management incl. system-managed groups (Inflow: Ready to Assign, per-card Credit Card Payment categories flagged non-deletable/non-editable)",
+            "phase": "v1"
+          },
+          {
+            "feature": "Monthly budget grid editor (per-category-per-month Assigned; derived Activity/Available displayed)",
+            "phase": "v1"
+          },
+          {
+            "feature": "Move-money-between-categories (Roll With the Punches) as net-zero two-legged operation",
+            "phase": "v1"
+          },
+          {
+            "feature": "Account management: on-budget (checking/savings/cash/creditCard/lineOfCredit) with starting-balance transaction",
+            "phase": "v1"
+          },
+          {
+            "feature": "Full transaction register: create/edit/void via superseding/tombstone events, splits (parent + subtransactions summing to parent), transfers (linked mirrored pair)",
+            "phase": "v1"
+          },
+          {
+            "feature": "Credit-card payment engine (auto-relocate funded spend into card payment category; card-payment transfers reduce payment category)",
+            "phase": "v1"
+          },
+          {
+            "feature": "Reconciliation flow: per-account cleared-balance compare, bulk-mark reconciled (locked), balance-adjustment transaction",
+            "phase": "v1"
+          },
+          {
+            "feature": "2-3 Target/goal types (MF Monthly Funding, TB Target Balance, TBD Target Balance by Date) with derived funding-needed/percentage-complete",
+            "phase": "v1"
+          },
+          {
+            "feature": "Remaining Target types (full NEED weekly/monthly/by-date set-aside vs refill, DEBT)",
+            "phase": "later"
+          },
+          {
+            "feature": "Off-budget tracking accounts (otherAsset/otherLiability) + Loan accounts and Net Worth report",
+            "phase": "later"
+          },
+          {
+            "feature": "Scheduled/recurring transactions engine (~13 frequencies, single-occurrence vs series edits, materialization as unapproved rows)",
+            "phase": "later"
+          },
+          {
+            "feature": "Reports: Spending Breakdown, Spending Trends, Income v Expense",
+            "phase": "later"
+          },
+          {
+            "feature": "Age of Money metric (FIFO outflow-to-inflow matching)",
+            "phase": "later"
+          },
+          {
+            "feature": "File-based CSV/OFX/QFX import with import_id dedup + matching to existing rows",
+            "phase": "later"
+          },
+          {
+            "feature": "Payee renaming rules + per-payee default-category auto-categorization on import",
+            "phase": "later"
+          },
+          {
+            "feature": "Direct/linked bank import via aggregator",
+            "phase": "later"
+          },
+          {
+            "feature": "Multi-currency (separate budget per currency; no in-budget conversion)",
+            "phase": "later"
+          },
+          {
+            "feature": "Optional opt-in heavy re-OCR reprocessor over already-synced receipt photos (Tesseract fast-path / local vision-model fallback)",
+            "phase": "later"
+          }
+        ],
+        "mobile": [
+          {
+            "feature": "Amount-first quick-add: numeric keypad focused on launch, amount the only required field, everything else defaulted (date=now, cleared=uncleared, default account, inferred category)",
+            "phase": "v1"
+          },
+          {
+            "feature": "OS fast-open surfaces: home/lock-screen widget with pre-selected favorite categories, app-icon long-press / App Shortcut, Siri/Shortcuts action for repeat transactions",
+            "phase": "v1"
+          },
+          {
+            "feature": "Offline-first local write with 'saved' confirmed from local state + background sync queue (never block save on network)",
+            "phase": "v1"
+          },
+          {
+            "feature": "Later-review inbox: batched approve/categorize pass for corrected payee/category/split/memo/cleared on partial captures",
+            "phase": "v1"
+          },
+          {
+            "feature": "On-device receipt OCR: native document scanner (VisionKit VNDocumentCameraViewController / CameraX) + native OCR (Vision VNRecognizeText / ML Kit Text Recognition v2), fully offline",
+            "phase": "v1"
+          },
+          {
+            "feature": "Deterministic field-extraction heuristics (amount near TOTAL, date regexes, top-block merchant) producing editable prefill; persist original image + raw OCR text/bboxes/confidence",
+            "phase": "v1"
+          },
+          {
+            "feature": "Merchant->category via static keyword map + per-user learned override table",
+            "phase": "v1"
+          },
+          {
+            "feature": "Pre-OCR image-quality gate (blur/resolution/char-size check)",
+            "phase": "v1"
+          },
+          {
+            "feature": "iOS Wallet 'Transaction' personal-automation auto-capture (in-store tap-to-pay: card+merchant+amount) feeding review inbox",
+            "phase": "later"
+          },
+          {
+            "feature": "Android bank SMS/notification parsing into review inbox",
+            "phase": "later"
+          },
+          {
+            "feature": "Voice entry ('twelve bucks coffee') as optional input into draft/review model",
+            "phase": "later"
+          },
+          {
+            "feature": "iOS 26+ Vision RecognizeDocumentsRequest structured line-item extraction (progressive enhancement)",
+            "phase": "later"
+          },
+          {
+            "feature": "On-device TFLite/Core ML text classifier for categorization (upgrade from lookup table)",
+            "phase": "later"
+          },
+          {
+            "feature": "Post-payment 'categorize this' nudge + periodic 'review N uncategorized' reminder notifications",
+            "phase": "later"
+          }
+        ],
+        "shared": [
+          {
+            "feature": "Integer milliunit money storage everywhere (outflow negative, inflow positive); no floats",
+            "phase": "v1"
+          },
+          {
+            "feature": "Two-layer data model: immutable append-only ledger of UUID-keyed postings + mutable plan layer of commutative assignment/move deltas",
+            "phase": "v1"
+          },
+          {
+            "feature": "All aggregates (Ready to Assign, category Available/Activity, account balances) as pure derived projections folded over merged log; no stored authoritative totals",
+            "phase": "v1"
+          },
+          {
+            "feature": "Global invariants (RTA=0, balance>=0) computed post-merge and surfaced as warning/red states, never enforced as merge constraints or auto-clamped",
+            "phase": "v1"
+          },
+          {
+            "feature": "Hybrid Logical Clock + unique node-id on every event for causal ordering and deterministic tie-break; per-field LWW reserved for descriptive metadata (payee/memo/flags) only",
+            "phase": "v1"
+          },
+          {
+            "feature": "Durable unique index on client-generated event UUID for idempotent dedup",
+            "phase": "v1"
+          },
+          {
+            "feature": "P2P pairwise sync of append-only log with Merkle-tree diffing (exchange only missing events)",
+            "phase": "v1"
+          },
+          {
+            "feature": "Partial-transaction tolerance: amount-only / uncategorized / unmatched-payee / pending rows are first-class valid records enrichable later",
+            "phase": "v1"
+          },
+          {
+            "feature": "Three-value cleared enum (uncleared/cleared/reconciled, reconciled locked) + separate approved boolean import gate",
+            "phase": "v1"
+          },
+          {
+            "feature": "Payee as first-class entity (not a string) to support later rename rules and default categories",
+            "phase": "v1"
+          },
+          {
+            "feature": "Fingerprint dedup (FIT-ID / date+amount+payee+account) for bank-imported rows lacking shared UUID",
+            "phase": "later"
+          },
+          {
+            "feature": "Six flag colors + none for organizing/filtering",
+            "phase": "later"
+          },
+          {
+            "feature": "Escrow/bounded-counter reservation protocol if a hard non-negative guarantee is ever required (reintroduces coordination; likely unnecessary for 2-person budget)",
+            "phase": "later"
+          }
+        ]
+      },
+      "invariants": [
+        "Money is stored only as integer milliunits (currency x 1000); outflows negative, inflows positive. Never use floating point for monetary values anywhere in the stack.",
+        "Global partition identity: sum of all category Available balances + Ready to Assign == total money in on-budget accounts, at all times after convergence. Every dollar sits in exactly one place (a category envelope or the single global Ready-to-Assign pool).",
+        "Ready to Assign is a SINGLE global derived value (not stored, not per-month): RTA = sum(income to 'Inflow: Ready to Assign') - sum(all Assigned across all categories/months) - sum(prior cash overspending). It is recomputed, never mutated, and may legitimately be negative.",
+        "Per (category, month) only Assigned is user-editable and stored; Activity and Available are derived and read-only. Available(m) = carryover_from_prior + Assigned(m) + Activity(m), where carryover = prior month's ending Available only if positive.",
+        "Positive category Available rolls forward month to month; a negative Available does NOT roll forward into the same category (the category resets toward zero next month).",
+        "Overspending resolution branches on the funding account type: cash/asset overspend is subtracted from next month's Ready to Assign; credit overspend becomes card debt surfaced as underfunding in that card's Credit Card Payment category and must NOT reduce Ready to Assign.",
+        "Every on-budget credit card has exactly one auto-created, system-managed Credit Card Payment category. A funded categorized credit outflow atomically decrements the spending category's Available, increments the payment category's Available by the funded portion, and decrements the card account balance (net category-Available change zero for the funded portion).",
+        "A categorized transaction atomically changes exactly one account balance and (if categorized) exactly one category's Activity in one month; splits fan out into subtransactions each hitting one category, and subtransaction amounts must sum to the parent amount.",
+        "Transfers between two on-budget accounts are non-categorized and budget-neutral, represented as two mirrored linked rows (transfer_account_id / transfer_transaction_id) that create/update/delete together.",
+        "Category-to-category moves and budget assignments are net-zero commutative deltas (a move is two-legged summing to zero), so concurrent edits both survive and sum rather than one clobbering the other.",
+        "Category belongs to exactly one category group (strict one-to-many). System categories ('Inflow: Ready to Assign', per-card payment categories) are flagged internal, non-deletable, and not directly editable; hidden categories retain their balances.",
+        "Recorded transactions are immutable append-only facts keyed by a client-generated UUID; an edit is a superseding/correcting event and a delete is a tombstone/reversing event -- postings are never mutated in place, preserving a reproducible auditable double-entry fold.",
+        "Off-budget (tracking/loan) accounts never affect Ready to Assign or category balances; they contribute only to Net Worth. Budget participation is gated by an on_budget flag at the account-type level."
+      ],
+      "risks": [
+        {
+          "risk": "Naive last-write-wins on a transaction amount or a stored category/account balance is a structural lost update: two offline peers editing concurrently silently destroy real money with no error. This is the single highest-severity failure mode for shared p2p financial data.",
+          "mitigation": "Never let LWW govern numeric truth. Model recorded money as an immutable append-only ledger of UUID-keyed postings and derive every balance by folding the merged log. Restrict per-field LWW strictly to descriptive metadata (payee, memo, flags). Amount truth always comes from summing enumerable immutable postings, never from a mutable field."
+        },
+        {
+          "risk": "The headline invariants 'Ready to Assign = 0' and 'category balance >= 0' are GLOBAL invariants that provably cannot be enforced at merge time from local-only state. Two partners can each legitimately assign the last $100 while offline; any local merge rule that blocks, clamps, or drops an assignment to force the invariant destroys a partner's intent and contradicts the offline/p2p goal.",
+          "mitigation": "Do not treat these as merge constraints. Recompute them deterministically as projections after logs converge and surface violations as displayed warning states (negative RTA, red category) for human reconciliation -- exactly matching YNAB's own tolerated states. Reserve escrow/bounded-counter coordination only if a hard non-negative guarantee is ever genuinely required (overkill for a 2-person budget)."
+        },
+        {
+          "risk": "Non-deterministic projection or inconsistent tie-breaking causes replicas to compute different balances from the same merged log, breaking the 'derived aggregates are automatically consistent' guarantee and reintroducing silent divergence.",
+          "mitigation": "Timestamp every event with a Hybrid Logical Clock plus a globally-unique node id (wall clock + same-ms counter + node id) so all replicas order events and break ties identically. Keep the projection fold a pure deterministic function of the ordered event set, and validate with the invariant identity (sum(category Available) + RTA == sum(on-budget balances)) as a post-merge test oracle."
+        },
+        {
+          "risk": "Duplicate/re-delivered events double-count money: an in-memory dedup set is empty on a fresh process until replay finishes, so a mid-replay duplicate slips through; bank-imported rows from two devices lack a shared UUID and double-import the same real-world transaction.",
+          "mitigation": "Persist a client-generated UUID/idempotency key behind a durable unique index checked before processing (durable store is the source of truth for 'seen'), so re-delivery is skipped. For imports with no stable UUID, dedup on a fingerprint (FIT-ID / date+amount+payee+account)."
+        },
+        {
+          "risk": "On-device OCR field extraction is wrong on a meaningful fraction of receipts (faded thermal, wrapped lines, foreign formats), and treating extracted amount/merchant/date as final truth injects bad financial data at capture time.",
+          "mitigation": "Always present extracted fields as an editable prefill with a one-tap confirm, never as final. Run a pre-OCR blur/resolution/char-size quality gate to raise accuracy cheaply, persist the original image plus raw OCR text/bboxes/confidence for later re-parsing, and capture user corrections as first-class training data for per-merchant category learning."
+        }
+      ],
+      "state_model_recommendation": "Adopt a hybrid, two-layer model rather than a single uniform CRDT or a single event log. Layer 1 -- recorded money movements (transactions/postings) -- is an immutable, append-only, event-sourced log keyed by client-generated UUIDs: creates, edits (superseding events), and deletes (tombstone/reversing events) are all appends, so merging is a conflict-free union and money is never overwritten or lost. This mirrors double-entry accounting and Actual Budget's messages_crdt->SQLite pattern, and gives a full audit trail. Layer 2 -- the revisable budget plan (per-category-per-month assignments and category-to-category moves) -- is modeled as commutative delta/counter operations (moves are two-legged, sum-to-zero) so concurrent partner edits both survive and sum, instead of absolute LWW cells where one intent is lost. Every event carries a Hybrid Logical Clock plus a unique node id for causal ordering and deterministic tie-breaking; per-field LWW is permitted ONLY for descriptive metadata (payee, memo, flags), never for numeric truth. Crucially, all aggregates -- Ready to Assign, category Available/Activity, account balances -- are stored nowhere and computed as pure deterministic projections folded over the merged log, which makes the invariants automatically consistent across replicas after convergence with zero repair logic. The global invariants (RTA=0, balance>=0) are surfaced as displayed warning states, not enforced at merge time. Pairwise p2p sync uses Merkle-tree diffing over the append-only log to exchange only missing events. Pure CRDT-everywhere is rejected because opaque counters cannot itemize auditable postings and field-level LWW still loses concurrent amounts; a single flat event log without the delta-based plan layer is rejected because absolute assignment sets would clobber concurrent plan edits. The hybrid captures the best of both: immutable auditable money plus cleanly-mergeable plan state."
+    }
+  },
+  "workflowProgress": [
+    {
+      "type": "workflow_phase",
+      "index": 1,
+      "title": "Research"
+    },
+    {
+      "type": "workflow_phase",
+      "index": 2,
+      "title": "Synthesize"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 1,
+      "label": "research:budget-model",
+      "phaseIndex": 1,
+      "phaseTitle": "Research",
+      "agentId": "a5f5375176e77fa98",
+      "model": "claude-opus-4-8",
+      "state": "done",
+      "startedAt": 1784363809726,
+      "queuedAt": 1784363809687,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "YNAB core budgeting data model, invariants, and philosophy",
+      "promptPreview": "You are a research analyst. Use web search and fetch real sources. Research YNAB's core budgeting DATA MODEL and philosophy in depth. Cover: the four rules; \"Ready to Assign\" pool; zero-based/envelope assignment; how money moves between categories; category groups vs categories; the monthly budget grid (assigned/activity/available per category per month); how available balances roll over month to …",
+      "lastProgressAt": 1784364043379,
+      "tokens": 24865,
+      "toolCalls": 17,
+      "durationMs": 233653,
+      "resultPreview": "{\"dimension\":\"YNAB core budgeting data model, invariants, and philosophy\",\"summary\":\"YNAB is a zero-based, digital-envelope budgeting system whose data model rests on one principle: every dollar currently sitting in on-budget accounts must be either assigned to a category (where it sits as that category's \\\"Available\\\" balance) or waiting in the single global \\\"Ready to Assign\\\" pool. Its four rul…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 2,
+      "label": "research:feature-surface",
+      "phaseIndex": 1,
+      "phaseTitle": "Research",
+      "agentId": "a10b30c3e4626562e",
+      "model": "claude-opus-4-8",
+      "state": "done",
+      "startedAt": 1784363809753,
+      "queuedAt": 1784363809687,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "YNAB Feature Surface Beyond the Core Budget (accounts, tran…",
+      "promptPreview": "You are a research analyst. Use web search and fetch real sources. Enumerate YNAB's full FEATURE SURFACE beyond the core budget. Cover: accounts (budget vs tracking, on/off budget), transactions (splits, transfers between accounts, payees, memos, flags/colors, cleared/uncleared/reconciled states, reconciliation flow), scheduled/recurring transactions, targets/goals (the different goal types: month…",
+      "lastProgressAt": 1784364009325,
+      "tokens": 30312,
+      "toolCalls": 20,
+      "durationMs": 199572,
+      "resultPreview": "{\"dimension\":\"YNAB Feature Surface Beyond the Core Budget (accounts, transactions, scheduling, targets, reports, import, currency, payees)\",\"summary\":\"Beyond the \\\"assign every dollar a job\\\" envelope budget, YNAB is built on a small set of tightly-coupled subsystems: an account layer (on-budget \\\"Budget\\\" accounts, off-budget \\\"Tracking\\\" accounts, and Loan accounts) that feeds both the budget an…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 3,
+      "label": "research:mobile",
+      "phaseIndex": 1,
+      "phaseTitle": "Research",
+      "agentId": "a30f3aa65ee64be32",
+      "model": "claude-opus-4-8",
+      "state": "done",
+      "startedAt": 1784364009350,
+      "queuedAt": 1784363809687,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "Mobile expense-capture experience — YNAB's mobile app + bes…",
+      "promptPreview": "You are a research analyst. Use web search and fetch real sources. Research YNAB's MOBILE app experience specifically, and best practices for fast on-the-go expense entry in budgeting apps generally. Cover: quick transaction entry flow, what fields are captured on the go vs deferred, home-screen widgets, notifications, offline entry and later sync, receipt capture if any, Apple/Google Pay or SMS/n…",
+      "lastProgressAt": 1784364172105,
+      "tokens": 26620,
+      "toolCalls": 18,
+      "durationMs": 162755,
+      "resultPreview": "{\"dimension\":\"Mobile expense-capture experience — YNAB's mobile app + best practices for sub-10-second on-the-go entry, and the minimal companion-app feature set\",\"summary\":\"YNAB's mobile app treats fast capture as a first-class problem: the core register entry is amount-first, with only the amount truly required and payee/category/date/memo/flag all optional or auto-defaulted, and it layers three…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 4,
+      "label": "research:local-first-sync",
+      "phaseIndex": 1,
+      "phaseTitle": "Research",
+      "agentId": "a95a35ef149d11924",
+      "model": "claude-opus-4-8",
+      "state": "done",
+      "startedAt": 1784364043421,
+      "queuedAt": 1784363809688,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "Conflict resolution for a local-first, peer-to-peer, multi-…",
+      "promptPreview": "You are a research analyst. Use web search and fetch real sources. Research the hard problems of building a LOCAL-FIRST, PEER-TO-PEER, multi-device SHARED budget (e.g. two partners + their phones all editing one budget with no central server). Focus on CONFLICT RESOLUTION for financial/ledger data: why naive last-write-wins is dangerous for money; CRDT approaches for a shared ledger and for the bu…",
+      "lastProgressAt": 1784364238539,
+      "tokens": 26183,
+      "toolCalls": 12,
+      "durationMs": 195118,
+      "resultPreview": "{\"dimension\":\"Conflict resolution for a local-first, peer-to-peer, multi-device shared budget (financial/ledger data)\",\"summary\":\"A shared local-first budget has two data populations with opposite conflict semantics, and conflating them is the core mistake. Recorded money movements (transactions) are immutable historical facts and must be modeled as an append-only, event-sourced log keyed by clien…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 5,
+      "label": "research:ocr",
+      "phaseIndex": 1,
+      "phaseTitle": "Research",
+      "agentId": "a28d8329169b411bf",
+      "model": "claude-opus-4-8",
+      "state": "done",
+      "startedAt": 1784364172133,
+      "queuedAt": 1784363809688,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "On-device / local receipt OCR and lightweight AI for an off…",
+      "promptPreview": "You are a research analyst. Use web search and fetch real sources. Research ON-DEVICE / LOCAL receipt OCR and lightweight AI for a mobile expense app (must run locally, privacy-preserving, no server). Cover: on-device OCR options for iOS (Vision framework / VNRecognizeText) and Android (ML Kit Text Recognition); extracting merchant, total amount, date, and line items from a receipt photo; local mo…",
+      "lastProgressAt": 1784364295728,
+      "tokens": 25129,
+      "toolCalls": 10,
+      "durationMs": 123595,
+      "resultPreview": "{\"dimension\":\"On-device / local receipt OCR and lightweight AI for an offline, privacy-preserving mobile expense app\",\"summary\":\"A fully offline \\\"snap a receipt -> prefilled amount + merchant + date\\\" flow is realistic today using only the OS-native OCR engines: Apple Vision (VNRecognizeText / VisionKit VNDocumentCameraViewController) on iOS and Google ML Kit Text Recognition v2 on Android. Both …"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 6,
+      "label": "synthesize",
+      "phaseIndex": 2,
+      "phaseTitle": "Synthesize",
+      "agentId": "af7d1471ed8fafb64",
+      "model": "claude-opus-4-8",
+      "state": "done",
+      "startedAt": 1784364295755,
+      "queuedAt": 1784364295731,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "Adopt a hybrid, two-layer model rather than a single unifor…",
+      "promptPreview": "You are a principal architect. Below are 5 research briefs (as JSON) for a local-first, peer-to-peer YNAB alternative with a desktop \"Basecamp\" app (where most features live) and a lightweight companion mobile app (fast expense capture + local receipt OCR). Synthesize them into a single decision-ready input for the architecture doc.\n\nBRIEFS:\n[\n  {\n    \"dimension\": \"YNAB core budgeting data model, …",
+      "lastProgressAt": 1784364367943,
+      "tokens": 37854,
+      "toolCalls": 1,
+      "durationMs": 72188,
+      "resultPreview": "{\"feature_split\":{\"basecamp\":[{\"feature\":\"Category-group / category management incl. system-managed groups (Inflow: Ready to Assign, per-card Credit Card Payment categories flagged non-deletable/non-editable)\",\"phase\":\"v1\"},{\"feature\":\"Monthly budget grid editor (per-category-per-month Assigned; derived Activity/Available displayed)\",\"phase\":\"v1\"},{\"feature\":\"Move-money-between-categories (Roll Wi…"
+    }
+  ],
+  "totalTokens": 170963,
+  "totalToolCalls": 78
+}
