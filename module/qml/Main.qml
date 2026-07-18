@@ -49,6 +49,15 @@ Item {
     }
     function openAction(a) { root.action = (root.action === a ? "" : a); }
 
+    // ---- grid filter + collapsible groups ----
+    property string filter: ""
+    property var collapsed: ({})
+    function toggleGroup(name) {
+        var c = Object.assign({}, root.collapsed);
+        c[name] = !c[name];
+        root.collapsed = c;
+    }
+
     Connections {
         target: logos
         function onViewModuleReadyChanged(moduleName, isReady) {
@@ -132,6 +141,7 @@ Item {
                 Btn { label: "+ Account"; active: action === "account"; onClicked: openAction("account") }
                 Btn { label: "+ Category"; active: action === "category"; onClicked: openAction("category") }
                 Btn { label: "Sync"; onClicked: run(backend.resync(), "Re-broadcasting to peers…") }
+                Field { placeholderText: "filter categories…"; implicitWidth: 150; onTextEdited: root.filter = text }
             }
 
             // ---- action panel (inline forms; type names, the backend resolves them) ----
@@ -225,11 +235,25 @@ Item {
                     Repeater {
                         model: budget.groups || []
                         delegate: ColumnLayout {
+                            id: grp
                             Layout.fillWidth: true
                             spacing: 0
-                            Text { text: modelData.name; color: accent; font.pixelSize: 13; font.bold: true; topPadding: 8; bottomPadding: 4 }
+                            readonly property var matched: (modelData.categories || []).filter(function (c) {
+                                return root.filter === "" || c.name.toLowerCase().indexOf(root.filter.toLowerCase()) >= 0;
+                            })
+                            readonly property bool isCollapsed: (root.collapsed[modelData.name] === true) && root.filter === ""
+                            visible: grp.matched.length > 0
+                            RowLayout {
+                                Layout.fillWidth: true
+                                Text {
+                                    text: (grp.isCollapsed ? "▸ " : "▾ ") + modelData.name
+                                    color: accent; font.pixelSize: 13; font.bold: true; topPadding: 8; bottomPadding: 4
+                                }
+                                Item { Layout.fillWidth: true; implicitHeight: 1 }
+                                TapHandler { onTapped: root.toggleGroup(modelData.name) }
+                            }
                             Repeater {
-                                model: modelData.categories || []
+                                model: grp.isCollapsed ? [] : grp.matched
                                 delegate: Rectangle {
                                     Layout.fillWidth: true
                                     implicitHeight: 34
