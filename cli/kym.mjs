@@ -331,6 +331,34 @@ switch (cmd) {
     break;
   }
 
+  case "networth": {
+    const doc = load();
+    const state = stateOf(doc);
+    const budgetCcy = doc.currency || DEFAULT_CURRENCY;
+    const byCcy = {};
+    for (const a of state.accounts) {
+      const ccy = a.currency || budgetCcy;
+      (byCcy[ccy] ??= { net: 0, rows: [] });
+      const bal = state.balances[a.id] || 0;
+      byCcy[ccy].net += bal;
+      byCcy[ccy].rows.push({ name: a.name, type: a.type, bal, onBudget: a.onBudget });
+    }
+    console.log(`\n  Net worth`);
+    console.log(`  ${"─".repeat(44)}`);
+    const codes = Object.keys(byCcy);
+    for (const ccy of codes) {
+      for (const r of byCcy[ccy].rows) {
+        console.log(`  ${r.name.padEnd(20)} ${formatMoney(r.bal, ccy).padStart(16)}  ${r.type}`);
+      }
+      console.log(`  ${"─".repeat(44)}`);
+      console.log(`  ${("Net (" + ccy + ")").padEnd(20)} ${formatMoney(byCcy[ccy].net, ccy).padStart(16)}`);
+      if (codes.length > 1) console.log("");
+    }
+    if (codes.length > 1) console.log("  (currencies shown separately — KYM does not convert with an exchange rate)");
+    console.log("");
+    break;
+  }
+
   case "report": {
     const doc = load();
     const month = M || monthOf(new Date().toISOString());
@@ -378,6 +406,7 @@ switch (cmd) {
   kym categorize <payee-text> <category>
   kym reconcile <account> <actual-balance> [--adjust]
   kym report [--month YYYY-MM]
+  kym networth
   kym sync <other-budget.json>
   kym log
 
