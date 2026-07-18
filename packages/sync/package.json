@@ -1,0 +1,20 @@
+{
+  "name": "@kym/sync",
+  "version": "0.1.0",
+  "description": "KYM sync core — household crypto (pairing-derived key, ChaCha20-Poly1305), the Delivery wire envelope, and a transport-agnostic SyncNode that merges peers' encrypted event streams. The physical transport (delivery_module / liblogosdelivery) plugs in under this.",
+  "type": "module",
+  "main": "src/index.mjs",
+  "exports": {
+    ".": "./src/index.mjs",
+    "./crypto": "./src/crypto.mjs",
+    "./wire": "./src/wire.mjs"
+  },
+  "dependencies": {
+    "@kym/contract": "file:../contract",
+    "@kym/engine": "file:../engine",
+    "@noble/hashes": "^2.2.0",
+    "@noble/ciphers": "^2.2.0"
+  },
+  "scripts": { "test": "node --test" },
+  "private": true
+}

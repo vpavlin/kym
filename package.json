@@ -7,10 +7,11 @@
   "workspaces": [
     "packages/contract",
     "packages/engine",
+    "packages/sync",
     "cli"
   ],
   "scripts": {
-    "test": "node --test packages/engine/test/*.test.mjs",
+    "test": "node --test packages/engine/test/*.test.mjs packages/sync/test/*.test.mjs",
     "demo": "node cli/demo.mjs"
   }
 }
