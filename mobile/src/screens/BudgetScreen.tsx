@@ -12,16 +12,28 @@ function Amount({
   milli,
   currency,
   dim,
+  warnNegative,
 }: {
   milli: number;
   currency: string;
   dim?: boolean;
+  // When set, a negative value renders a non-color "over" indicator (a ⚠ glyph)
+  // next to the amount — meaning survives without color (WCAG 1.4.1). The amount
+  // keeps its minus sign either way.
+  warnNegative?: boolean;
 }) {
   const color = milli > 0 ? theme.good : milli < 0 ? theme.danger : theme.textDim;
   return (
-    <Text style={[styles.amt, { color: dim ? theme.textDim : color }]}>
-      {formatMoney(milli, currency)}
-    </Text>
+    <View style={styles.amtWrap}>
+      {warnNegative && milli < 0 ? (
+        <Text style={styles.overTag} accessibilityLabel="overspent">
+          ⚠ over
+        </Text>
+      ) : null}
+      <Text style={[styles.amt, { color: dim ? theme.textDim : color }]}>
+        {formatMoney(milli, currency)}
+      </Text>
+    </View>
   );
 }
 
@@ -53,15 +65,36 @@ export function BudgetScreen() {
       >
         <Text style={styles.rtaLabel}>Ready to Assign · {month}</Text>
         <Amount milli={state.readyToAssign} currency={budgetCurrency} />
-        {state.readyToAssign < 0 ? (
-          <Text style={styles.rtaWarn}>Over-assigned — move money to fix.</Text>
-        ) : null}
+        {/* Status WORD alongside the number, so the state reads without color
+            (WCAG 1.4.1): over-assigned / all assigned / to assign. */}
+        <Text
+          style={[
+            styles.rtaWarn,
+            {
+              color:
+                state.readyToAssign < 0
+                  ? theme.danger
+                  : state.readyToAssign === 0
+                  ? theme.good
+                  : theme.textDim,
+            },
+          ]}
+        >
+          {state.readyToAssign < 0
+            ? "⚠ over-assigned — move money to fix"
+            : state.readyToAssign === 0
+            ? "✓ all assigned"
+            : "to assign"}
+        </Text>
       </View>
 
       {/* Invariant oracle — the same check the engine tests assert. */}
       <View style={styles.invariant}>
-        <Text style={[styles.invDot, { color: invariant.ok ? theme.good : theme.danger }]}>
-          {invariant.ok ? "●" : "▲"}
+        <Text
+          style={[styles.invDot, { color: invariant.ok ? theme.good : theme.danger }]}
+          accessibilityLabel={invariant.ok ? "invariant holds" : "invariant broken"}
+        >
+          {invariant.ok ? "✓" : "✗"}
         </Text>
         <Text style={styles.invText}>
           {invariant.ok
@@ -113,7 +146,7 @@ export function BudgetScreen() {
                       </Text>
                     </View>
                     <View style={styles.availPill}>
-                      <Amount milli={avail} currency={budgetCurrency} />
+                      <Amount milli={avail} currency={budgetCurrency} warnNegative />
                     </View>
                   </View>
                 );
@@ -151,6 +184,14 @@ export function BudgetScreen() {
 const styles = StyleSheet.create({
   root: { flex: 1, paddingHorizontal: 16 },
   amt: { fontSize: 18, fontWeight: "800" },
+  amtWrap: { flexDirection: "row", alignItems: "center", gap: 6 },
+  overTag: {
+    color: theme.danger,
+    fontSize: 11,
+    fontWeight: "800",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
   rta: {
     borderWidth: 2,
     borderRadius: 16,

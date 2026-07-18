@@ -4,6 +4,7 @@
 // stays append-only, and balances re-fold on the Budget tab.
 import React, { useMemo, useState } from "react";
 import {
+  Alert,
   Modal,
   Pressable,
   ScrollView,
@@ -14,12 +15,39 @@ import {
 import { useBudget } from "../state/BudgetContext";
 import { formatMoney, suggestCategory } from "../lib/engine";
 import { theme } from "../ui/theme";
+import { useToast } from "../ui/Toast";
 import type { TxnView } from "../lib/budget";
 
 export function ReviewScreen() {
   const { txns, events, state, setTxnCategory, setTxnCleared, budgetCurrency } =
     useBudget();
   const [editing, setEditing] = useState<TxnView | null>(null);
+  const { show, toast } = useToast();
+
+  const catNameById = (id: string | null) =>
+    (id && state.categories.find((c) => c.id === id)?.name) || "Uncategorized";
+
+  // Every action confirms on success and SURFACES its error — never silent
+  // (Nielsen: visibility of system status). Errors go to an Alert that explains.
+  const applyCategory = async (txnId: string, categoryId: string | null) => {
+    try {
+      await setTxnCategory(txnId, categoryId);
+      show(
+        categoryId ? `Set to ${catNameById(categoryId)}` : "Category cleared"
+      );
+    } catch (e: any) {
+      Alert.alert("Couldn't set category", e?.message ?? String(e));
+    }
+  };
+
+  const applyCleared = async (txnId: string, cleared: TxnView["cleared"]) => {
+    try {
+      await setTxnCleared(txnId, cleared);
+      show(cleared === "cleared" ? "Marked cleared" : "Marked uncleared");
+    } catch (e: any) {
+      Alert.alert("Couldn't update transaction", e?.message ?? String(e));
+    }
+  };
 
   const catName = (id?: string | null) =>
     id ? state.categories.find((c) => c.id === id)?.name ?? id : null;
@@ -78,7 +106,7 @@ export function ReviewScreen() {
                 {suggestion ? (
                   <Pressable
                     style={styles.suggest}
-                    onPress={() => setTxnCategory(t.txnId, suggestion.categoryId)}
+                    onPress={() => applyCategory(t.txnId, suggestion.categoryId)}
                   >
                     <Text style={styles.suggestText}>→ {suggestion.name}?</Text>
                   </Pressable>
@@ -115,7 +143,7 @@ export function ReviewScreen() {
                     key={c.id}
                     style={styles.catOption}
                     onPress={async () => {
-                      if (editing) await setTxnCategory(editing.txnId, c.id);
+                      if (editing) await applyCategory(editing.txnId, c.id);
                       setEditing(null);
                     }}
                   >
@@ -128,7 +156,7 @@ export function ReviewScreen() {
               <Pressable
                 style={styles.catOption}
                 onPress={async () => {
-                  if (editing) await setTxnCategory(editing.txnId, null);
+                  if (editing) await applyCategory(editing.txnId, null);
                   setEditing(null);
                 }}
               >
@@ -141,7 +169,7 @@ export function ReviewScreen() {
               style={styles.clearedBtn}
               onPress={async () => {
                 if (editing) {
-                  await setTxnCleared(
+                  await applyCleared(
                     editing.txnId,
                     editing.cleared === "cleared" ? "uncleared" : "cleared"
                   );
@@ -156,6 +184,8 @@ export function ReviewScreen() {
           </Pressable>
         </Pressable>
       </Modal>
+
+      {toast}
     </View>
   );
 }
