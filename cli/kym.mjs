@@ -25,7 +25,7 @@ import { readFileSync as fsRead } from "node:fs";
 const VALUE_FLAGS = new Set(["--file", "--device", "--type", "--balance", "--group",
   "--account", "--category", "--payee", "--memo", "--date", "--month", "--currency",
   "--format", "--delimiter", "--date-col", "--amount-col", "--payee-col", "--by"]);
-const BOOL_FLAGS = new Set(["--off-budget", "--set", "--dry-run"]);
+const BOOL_FLAGS = new Set(["--off-budget", "--set", "--dry-run", "--adjust"]);
 
 const RAW = process.argv.slice(2);
 const FLAGS = {};
@@ -302,6 +302,35 @@ switch (cmd) {
     break;
   }
 
+  case "reconcile": {
+    const doc = load();
+    const state = stateOf(doc);
+    const acct = findAccount(state, positionals()[0] || die("usage: kym reconcile <account> <actual-balance> [--adjust]"));
+    const actual = toMilli(positionals()[1] ?? die("actual (bank) balance required"));
+    const ccy = acct.currency || doc.currency || DEFAULT_CURRENCY;
+    const bal = state.balances[acct.id] || 0;
+    const diff = actual - bal;
+    const c = clockFor(doc);
+    if (diff !== 0 && !argValue("--adjust")) {
+      console.log(`"${acct.name}" is off by ${formatMoney(diff, ccy)}  (KYM ${formatMoney(bal, ccy)} vs bank ${formatMoney(actual, ccy)}).`);
+      console.log(`Recheck your transactions, or re-run with --adjust to book a balance adjustment.`);
+      break;
+    }
+    if (diff !== 0) {
+      // uncategorized adjustment -> flows to Ready to Assign, invariant preserved
+      doc.events.push(ev.txnCreate(c.send(), {
+        txnId: randomUUID(), accountId: acct.id, amount: diff, date: new Date().toISOString(),
+        payeeId: "Reconciliation adjustment", cleared: "reconciled",
+      }));
+    }
+    const toLock = listTransactions(doc.events).filter((t) => t.accountId === acct.id && t.cleared !== "reconciled");
+    for (const t of toLock) doc.events.push(ev.txnEdit(c.send(), { txnId: t.txnId, cleared: "reconciled" }));
+    save(doc);
+    console.log(`✓ Reconciled "${acct.name}" at ${formatMoney(actual, ccy)} — ${toLock.length} transaction(s) locked` +
+      `${diff !== 0 ? `, adjustment ${formatMoney(diff, ccy)} booked` : ""}.`);
+    break;
+  }
+
   case "report": {
     const doc = load();
     const month = M || monthOf(new Date().toISOString());
@@ -347,6 +376,7 @@ switch (cmd) {
   kym accounts
   kym import <file.csv> --account <acct> [--format airbank|revolut] [--dry-run]
   kym categorize <payee-text> <category>
+  kym reconcile <account> <actual-balance> [--adjust]
   kym report [--month YYYY-MM]
   kym sync <other-budget.json>
   kym log
