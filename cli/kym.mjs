@@ -1,0 +1,275 @@
+#!/usr/bin/env node
+// kym — a real, persistent, command-line KYM budget. Drives the same @kym/engine
+// the Basecamp module will mirror. The budget is stored as an append-only event
+// log (JSON) — the exact wire format that syncs over Delivery. `kym sync` merges
+// another device's log to demonstrate local-first convergence for real.
+//
+//   kym init --device laptop
+//   kym income 2500 --account Checking
+//   kym account add Checking --type checking --balance 100
+//   kym category add Groceries --group Everyday
+//   kym assign Groceries 400
+//   kym spend 25.40 --account Checking --category Groceries --payee "Corner Shop"
+//   kym budget
+//   kym sync ../phone/budget.json
+
+import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { ev, Clock, toMilli, fromMilli, monthOf, AccountType, RTA_INFLOW } from "@kym/contract";
+import { computeState, checkInvariant, mergeEvents } from "@kym/engine";
+
+// Flags that take a value (consume the next token). Everything else after the
+// command is a positional. Flags may appear anywhere (before or after the command).
+const VALUE_FLAGS = new Set(["--file", "--device", "--type", "--balance", "--group",
+  "--account", "--category", "--payee", "--memo", "--date", "--month"]);
+const BOOL_FLAGS = new Set(["--off-budget", "--set"]);
+
+const RAW = process.argv.slice(2);
+const FLAGS = {};
+const POS = [];
+for (let i = 0; i < RAW.length; i++) {
+  const a = RAW[i];
+  if (VALUE_FLAGS.has(a)) { FLAGS[a] = RAW[++i]; }
+  else if (BOOL_FLAGS.has(a)) { FLAGS[a] = true; }
+  else if (a.startsWith("--")) { FLAGS[a] = RAW[i + 1] && !RAW[i + 1].startsWith("--") ? RAW[++i] : true; }
+  else POS.push(a);
+}
+const FILE = FLAGS["--file"] || process.env.KYM_FILE || "budget.json";
+
+function argValue(flag) { return FLAGS[flag]; }
+function positionals() { return POS.slice(1); } // drop the command itself
+function load() {
+  if (!existsSync(FILE)) die(`no budget at ${FILE} — run: kym init`);
+  return JSON.parse(readFileSync(FILE, "utf8"));
+}
+function save(doc) { writeFileSync(FILE, JSON.stringify(doc, null, 2) + "\n"); }
+function die(msg) { console.error(`kym: ${msg}`); process.exit(1); }
+
+// A clock primed off the existing log so new events sort strictly after them.
+function clockFor(doc) {
+  const c = new Clock(doc.device);
+  for (const e of doc.events) c.receive(e.hlc);
+  return c;
+}
+function stateOf(doc, opts) { return computeState(doc.events, opts); }
+
+// Resolve a user-typed account/category name to its id (case-insensitive).
+function findAccount(state, name) {
+  const a = state.accounts.find((x) => x.name.toLowerCase() === String(name).toLowerCase());
+  if (!a) die(`unknown account "${name}" — see: kym accounts`);
+  return a;
+}
+function findCategory(state, name) {
+  if (name === RTA_INFLOW) return { id: RTA_INFLOW, name: "Ready to Assign" };
+  const c = state.categories.find((x) => x.name.toLowerCase() === String(name).toLowerCase());
+  if (!c) die(`unknown category "${name}" — see: kym budget`);
+  return c;
+}
+function slug(name) { return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || randomUUID().slice(0, 8); }
+
+const cmd = POS[0];
+const M = argValue("--month");
+
+switch (cmd) {
+  case "init": {
+    if (existsSync(FILE)) die(`${FILE} already exists`);
+    const device = argValue("--device") || `dev-${randomUUID().slice(0, 6)}`;
+    save({ v: 1, device, deviceId: randomUUID(), events: [] });
+    console.log(`Initialized KYM budget at ${FILE} (device: ${device})`);
+    break;
+  }
+
+  case "account": {
+    const sub = positionals()[0];
+    const doc = load();
+    if (sub !== "add") die("usage: kym account add <name> --type <checking|savings|cash|creditCard|lineOfCredit|tracking> [--balance N]");
+    const name = positionals()[1] || die("account name required");
+    const type = argValue("--type") || AccountType.CHECKING;
+    if (!Object.values(AccountType).includes(type)) die(`bad --type ${type}`);
+    const balance = toMilli(argValue("--balance") || "0");
+    const onBudget = argValue("--off-budget") ? false : type !== AccountType.TRACKING;
+    const c = clockFor(doc);
+    doc.events.push(ev.accountCreate(c.send(), {
+      accountId: `acct:${slug(name)}`, name, accountType: type, onBudget,
+      startingBalance: balance, startDate: new Date().toISOString(),
+    }));
+    save(doc);
+    console.log(`+ account "${name}" (${type}${onBudget ? "" : ", off-budget"}) starting ${fromMilli(balance)}`);
+    break;
+  }
+
+  case "category": {
+    const sub = positionals()[0];
+    const doc = load();
+    if (sub !== "add") die("usage: kym category add <name> [--group <group>]");
+    const name = positionals()[1] || die("category name required");
+    const groupName = argValue("--group") || "General";
+    const state = stateOf(doc);
+    const c = clockFor(doc);
+    let group = state.groups.find((g) => g.name.toLowerCase() === groupName.toLowerCase());
+    if (!group) {
+      const gid = `grp:${slug(groupName)}`;
+      doc.events.push(ev.groupCreate(c.send(), { groupId: gid, name: groupName }));
+      group = { id: gid, name: groupName };
+    }
+    doc.events.push(ev.categoryCreate(c.send(), { categoryId: `cat:${slug(name)}`, groupId: group.id, name }));
+    save(doc);
+    console.log(`+ category "${name}" in ${group.name}`);
+    break;
+  }
+
+  case "income": {
+    const doc = load();
+    const amount = toMilli(positionals()[0] || die("amount required"));
+    const state = stateOf(doc);
+    const acct = findAccount(state, argValue("--account") || die("--account required"));
+    const c = clockFor(doc);
+    doc.events.push(ev.txnCreate(c.send(), {
+      txnId: randomUUID(), accountId: acct.id, amount: Math.abs(amount),
+      date: argValue("--date") || new Date().toISOString(), payeeId: argValue("--payee"),
+      categoryId: RTA_INFLOW, cleared: "cleared",
+    }));
+    save(doc);
+    console.log(`+ income ${fromMilli(Math.abs(amount))} to ${acct.name} -> Ready to Assign`);
+    break;
+  }
+
+  case "spend": {
+    const doc = load();
+    const amount = toMilli(positionals()[0] || die("amount required"));
+    const state = stateOf(doc);
+    const acct = findAccount(state, argValue("--account") || die("--account required"));
+    const cat = findCategory(state, argValue("--category") || die("--category required"));
+    const c = clockFor(doc);
+    doc.events.push(ev.txnCreate(c.send(), {
+      txnId: randomUUID(), accountId: acct.id, amount: -Math.abs(amount),
+      date: argValue("--date") || new Date().toISOString(),
+      payeeId: argValue("--payee"), categoryId: cat.id, memo: argValue("--memo"),
+      cleared: "uncleared",
+    }));
+    save(doc);
+    console.log(`- spent ${fromMilli(Math.abs(amount))} from ${acct.name} on ${cat.name}${argValue("--payee") ? ` @ ${argValue("--payee")}` : ""}`);
+    break;
+  }
+
+  case "assign": {
+    const doc = load();
+    const state = stateOf(doc);
+    const cat = findCategory(state, positionals()[0] || die("category required"));
+    const amount = toMilli(positionals()[1] || die("amount required"));
+    const month = M || monthOf(new Date().toISOString());
+    const mode = argValue("--set") !== undefined ? "set" : "delta";
+    const c = clockFor(doc);
+    doc.events.push(ev.assign(c.send(), { categoryId: cat.id, month, amount, mode }));
+    save(doc);
+    console.log(`= assigned ${mode === "set" ? "=" : "+"}${fromMilli(amount)} to ${cat.name} (${month})`);
+    break;
+  }
+
+  case "move": {
+    const doc = load();
+    const state = stateOf(doc);
+    const from = findCategory(state, positionals()[0] || die("from category required"));
+    const to = findCategory(state, positionals()[1] || die("to category required"));
+    const amount = toMilli(positionals()[2] || die("amount required"));
+    const month = M || monthOf(new Date().toISOString());
+    const c = clockFor(doc);
+    doc.events.push(ev.move(c.send(), { fromCategoryId: from.id, toCategoryId: to.id, month, amount }));
+    save(doc);
+    console.log(`~ moved ${fromMilli(amount)} : ${from.name} -> ${to.name} (${month})`);
+    break;
+  }
+
+  case "budget": {
+    const doc = load();
+    const state = stateOf(doc, M ? { asOf: M } : {});
+    printBudget(state);
+    break;
+  }
+
+  case "accounts": {
+    const doc = load();
+    const state = stateOf(doc);
+    console.log(`\n  Accounts (device: ${doc.device})`);
+    console.log(`  ${"─".repeat(44)}`);
+    for (const a of state.accounts) {
+      console.log(`  ${a.name.padEnd(20)} ${fromMilli(state.balances[a.id] || 0).padStart(12)}  ${a.onBudget ? a.type : a.type + " (off-budget)"}`);
+    }
+    console.log("");
+    break;
+  }
+
+  case "sync": {
+    const other = positionals()[0] || die("usage: kym sync <other-budget.json>");
+    if (!existsSync(other)) die(`no such file: ${other}`);
+    const doc = load();
+    const theirs = JSON.parse(readFileSync(other, "utf8"));
+    const before = doc.events.length;
+    const merged = mergeEvents(doc.events, theirs.events);
+    doc.events = merged;
+    save(doc);
+    const gained = merged.length - before;
+    console.log(`Synced ${other}: ${merged.length} events total (+${gained} new). Both logs now converge.`);
+    printBudget(stateOf(doc));
+    break;
+  }
+
+  case "log": {
+    const doc = load();
+    for (const e of mergeEvents(doc.events)) {
+      console.log(`${e.hlc.wall}.${e.hlc.ctr}@${e.dev}  ${e.type.padEnd(15)} ${JSON.stringify(e.payload)}`);
+    }
+    break;
+  }
+
+  default:
+    console.log(`kym — Know Your Money (local-first budget)
+
+  kym init [--device NAME] [--file F]
+  kym account add <name> --type <checking|savings|cash|creditCard|lineOfCredit|tracking> [--balance N] [--off-budget]
+  kym category add <name> [--group G]
+  kym income <amount> --account <acct> [--payee P] [--date ISO]
+  kym spend <amount> --account <acct> --category <cat> [--payee P] [--memo M] [--date ISO]
+  kym assign <category> <amount> [--month YYYY-MM] [--set]
+  kym move <from> <to> <amount> [--month YYYY-MM]
+  kym budget [--month YYYY-MM]
+  kym accounts
+  kym sync <other-budget.json>
+  kym log
+
+  Budget file: ${FILE} (override with --file or KYM_FILE)`);
+}
+
+function printBudget(state) {
+  const inv = checkInvariant(state);
+  const byGroup = new Map();
+  for (const cat of state.categories) {
+    const g = state.groups.find((x) => x.id === cat.groupId)?.name || "—";
+    if (!byGroup.has(g)) byGroup.set(g, []);
+    byGroup.get(g).push(cat);
+  }
+  console.log(`\n  Budget — ${state.currentMonth || "(no activity yet)"}`);
+  console.log(`  Ready to Assign: ${fromMilli(state.readyToAssign)}${state.readyToAssign < 0 ? "  ⚠ negative" : state.readyToAssign === 0 ? "  ✓ every dollar has a job" : ""}`);
+  console.log(`  ${"─".repeat(58)}`);
+  console.log(`  ${"CATEGORY".padEnd(24)}${"ASSIGNED".padStart(11)}${"ACTIVITY".padStart(11)}${"AVAILABLE".padStart(12)}`);
+  for (const [group, cats] of byGroup) {
+    console.log(`  ${group}`);
+    for (const cat of cats) {
+      const rows = state.categoryMonths.filter((r) => r.categoryId === cat.id);
+      const row = rows[rows.length - 1] || { assigned: 0, activity: 0 };
+      const avail = state.categoryAvailable[cat.id] || 0;
+      const flag = avail < 0 ? " ⚠" : "";
+      console.log(`  ${("  " + cat.name).padEnd(24)}${fromMilli(row.assigned).padStart(11)}${fromMilli(row.activity).padStart(11)}${fromMilli(avail).padStart(12)}${flag}`);
+    }
+  }
+  const ccp = Object.entries(state.creditCardPayments || {});
+  if (ccp.length) {
+    console.log(`  Credit Card Payments`);
+    for (const [acctId, avail] of ccp) {
+      const acct = state.accounts.find((a) => a.id === acctId);
+      console.log(`  ${("  " + (acct?.name || acctId)).padEnd(46)}${fromMilli(avail).padStart(12)}`);
+    }
+  }
+  console.log(`  ${"─".repeat(58)}`);
+  console.log(`  invariant ${inv.ok ? "OK ✓" : `BROKEN ✗ (diff ${fromMilli(inv.diff)})`}  ·  assets ${fromMilli(inv.assets)} = categories ${fromMilli(inv.categoriesAvail)} + RTA ${fromMilli(inv.readyToAssign)}\n`);
+}

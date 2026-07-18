@@ -17,9 +17,27 @@ A household budget has **two or more concurrent writers by definition** — both
 
 KYM is designed around this from line one. Recorded money is an **immutable append-only ledger** (an edit is a new event, never an overwrite); the budget plan is **commutative deltas** (moving money is a net-zero two-legged op, so concurrent edits *sum* instead of clobbering); and every balance is a **derived projection**, stored nowhere, recomputed identically on every device. Merges are a conflict-free union of events. See [`docs/data-model.md`](docs/data-model.md).
 
+## Try it (Phase 0 — working today)
+
+```sh
+npm install
+npm test        # engine unit tests + a 200-trial convergence property test
+npm run demo    # two partners edit one budget offline, then sync → identical result
+
+# drive a real budget from the CLI (append-only event log = the wire format):
+node cli/kym.mjs --file laptop.json init --device laptop
+node cli/kym.mjs --file laptop.json account add Checking --type checking --balance 2000
+node cli/kym.mjs --file laptop.json category add Groceries --group Everyday
+node cli/kym.mjs --file laptop.json income 3000 --account Checking
+node cli/kym.mjs --file laptop.json assign Groceries 400
+node cli/kym.mjs --file laptop.json spend 54.30 --account Checking --category Groceries --payee "Corner Shop"
+node cli/kym.mjs --file laptop.json budget
+# then: cp laptop.json phone.json, edit each offline, and `kym sync` them → they converge.
+```
+
 ## Status
 
-Early. The portable engine + contract + convergence demo are the first milestone (Phase 0). The Basecamp module and mobile app follow. See [`docs/plan.md`](docs/plan.md).
+Phase 0 **done**: the portable engine, wire contract, convergence proof, and a usable CLI budget all work (`npm test` green; concurrent offline edits converge with the zero-based invariant holding). Phase 1 (the Basecamp C++/QML module mirroring this engine) and the mobile capture app follow. See [`docs/plan.md`](docs/plan.md).
 
 ## Principle
 
