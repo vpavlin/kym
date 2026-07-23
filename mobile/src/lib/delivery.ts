@@ -162,19 +162,24 @@ export async function ensureNode(onStatus?: (s: string) => void): Promise<string
     onStatus?.("Joining mesh…");
     await LogosMessaging.start(c);
     // Subscribe EVERY budget's topic on the relay mesh (pubsub subscribe, not the
-    // filter/content-topic path). Idempotent.
-    for (const r of routes) await LogosMessaging.relaySubscribe(c, r.topic);
+    // Subscribe by CONTENT topic — subscribeContentTopic AUTO-SHARDS it to the real
+    // pubsub topic (/waku/2/rs/<cluster>/<shard>), the same one send() publishes to.
+    // relaySubscribe() takes a RAW pubsub topic; handing it a content topic
+    // subscribes to a non-existent shard and the node receives NOTHING (that was the
+    // sync bug — see logos_messaging_ffi.c). With relay:true this joins the gossip
+    // mesh for that shard, so we receive relayed messages.
+    for (const r of routes) await LogosMessaging.subscribeContentTopic(c, r.topic);
     onStatus?.("Forming mesh…");
     await new Promise((r) => setTimeout(r, SETTLE_MS));
     const n = { ctx: c };
     node = n;
     // Re-subscribe periodically so a new budget's topic (added via refreshRoutes)
-    // and any dropped subscription self-heal. Idempotent on the relay mesh.
+    // and any dropped subscription self-heal. Idempotent.
     if (renewTimer) clearInterval(renewTimer);
     {
       renewTimer = setInterval(() => {
         for (const r of routes) {
-          LogosMessaging.relaySubscribe(n.ctx, r.topic).catch(() => {
+          LogosMessaging.subscribeContentTopic(n.ctx, r.topic).catch(() => {
             /* transient — the next tick retries; node stays up */
           });
         }
@@ -222,7 +227,7 @@ export async function sendEnvelope(event: KymEvent, budgetId: string): Promise<v
 export async function refreshRoutes(): Promise<void> {
   if (!node) return;
   routes = await buildRoutes();
-  for (const r of routes) await LogosMessaging.relaySubscribe(node.ctx, r.topic).catch(() => {});
+  for (const r of routes) await LogosMessaging.subscribeContentTopic(node.ctx, r.topic).catch(() => {});
 }
 
 /**
