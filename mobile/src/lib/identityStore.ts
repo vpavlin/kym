@@ -83,3 +83,13 @@ export function resetIdentityCache(budgetId?: string): void {
   if (budgetId) cache.delete(budgetId);
   else cache.clear();
 }
+
+/** Permanently delete a budget's household secret from the keystore (on delete). */
+export async function deleteSecret(budgetId: string): Promise<void> {
+  cache.delete(budgetId);
+  try {
+    await SecureStore.deleteItemAsync(secretKey(budgetId));
+  } catch {
+    /* already gone / keystore unavailable — nothing to do */
+  }
+}

@@ -961,12 +961,17 @@ std::string KymCoreImpl::setBudgetColor(std::string id, std::string color) {
 
 std::string KymCoreImpl::deleteBudget(std::string id) {
     std::lock_guard<std::recursive_mutex> lk(m_mtx);
-    if (!m_budgets.count(id)) return "no such budget";
+    auto it = m_budgets.find(id);
+    if (it == m_budgets.end()) return "no such budget";
     if (m_order.size() <= 1) return "can't delete the only budget";
-    m_budgets.erase(id);
+    // Remove the budget's on-disk data (log + household key). Only for a NON-root
+    // budget — the default/root budget lives at m_dataDir and we must not wipe that.
+    const std::string dir = it->second.dir;
+    m_budgets.erase(it);
     m_order.erase(std::remove(m_order.begin(), m_order.end(), id), m_order.end());
     if (m_current == id) m_current = m_order.front();
-    saveBudgets(); publishBudget();   // note: leaves the on-disk files; only forgets it from the registry
+    if (!dir.empty() && dir != m_dataDir) { std::error_code ec; std::filesystem::remove_all(dir, ec); }
+    saveBudgets(); publishBudget();
     return m_budgetJson;
 }
 

@@ -40,6 +40,7 @@ export function SetupScreen() {
     syncError,
     reconnect,
     syncNow,
+    rxInfo,
   } = useBudget();
   const styles = useMemo(() => makeStyles(currentBudgetColor), [currentBudgetColor]);
 
@@ -365,11 +366,24 @@ export function SetupScreen() {
               (peerInfo.mesh > 0 ? ` · mesh ${peerInfo.mesh}` : "")
             : ""}
         </Text>
+        {/* Received-message counters: seen = arrived over the mesh, opened = decrypted
+            with one of our budget keys. seen 0 → nothing is reaching us (no peer on
+            this budget's topic, or the mesh isn't delivering). */}
+        <Text style={styles.note}>
+          Received: {rxInfo.seen} seen · {rxInfo.opened} for our budgets
+          {rxInfo.seen === 0 ? " — nothing arriving yet (is a peer online + sharing this budget?)" : ""}
+        </Text>
         {syncError ? (
           <Text style={[styles.note, { color: theme.warn }]}>{syncError}</Text>
         ) : null}
         <View style={{ flexDirection: "row", gap: 8, marginTop: 8 }}>
-          <Pressable style={[styles.primary, { flex: 1, marginTop: 0 }]} onPress={() => syncNow()}>
+          <Pressable
+            style={[styles.primary, { flex: 1, marginTop: 0 }]}
+            onPress={async () => {
+              await syncNow();
+              Alert.alert("Sync requested", "Asked peers to re-send this budget and re-shared ours. Watch the “Received” counter.");
+            }}
+          >
             <Text style={styles.primaryText}>Sync now</Text>
           </Pressable>
           <Pressable style={[styles.secondary, { flex: 1, marginTop: 0 }]} onPress={() => reconnect()}>

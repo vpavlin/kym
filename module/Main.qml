@@ -336,6 +336,34 @@ Item {
                                             }
                                             MouseArea { id: bItemMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
                                                 onClicked: { budgetPop.close(); if (modelData.current !== true) run(callCore("selectBudget", [modelData.id]), "Switched to " + modelData.name); } }
+                                            // Delete — on hover, with a strong confirm. Declared AFTER bItemMa so
+                                            // its MouseArea sits on top in the corner. Hidden for the only budget.
+                                            Rectangle {
+                                                visible: (bItemMa.containsMouse || bDelMa.containsMouse || bDelConfirm.opened) && (root.budgets.length > 1)
+                                                anchors.right: parent.right; anchors.rightMargin: 6; anchors.verticalCenter: parent.verticalCenter
+                                                implicitWidth: 20; implicitHeight: 20; radius: 4
+                                                color: bDelMa.containsMouse ? warn : root.panel
+                                                Text { anchors.centerIn: parent; text: "🗑"; font.pixelSize: 12 }
+                                                MouseArea { id: bDelMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                                    onClicked: bDelConfirm.open() }
+                                                Popup {
+                                                    id: bDelConfirm
+                                                    y: parent.height + 2; x: -190; width: 240; padding: 10
+                                                    background: Rectangle { color: root.panel; border.color: warn; border.width: 1; radius: 8 }
+                                                    contentItem: ColumnLayout {
+                                                        spacing: 7
+                                                        Text { text: "Delete \"" + modelData.name + "\"?"; color: fg; font.pixelSize: 13; font.bold: true; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+                                                        Text { text: "Removes it + its household key from THIS device (log + key deleted). Copies on other devices are untouched — re-join with the code to get it back. Can't be undone."
+                                                               color: dim; font.pixelSize: 11; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+                                                        RowLayout {
+                                                            Item { Layout.fillWidth: true }
+                                                            Btn { label: "Cancel"; onClicked: bDelConfirm.close() }
+                                                            Btn { label: "Delete"; primary: true
+                                                                  onClicked: { bDelConfirm.close(); budgetPop.close(); run(callCore("deleteBudget", [modelData.id]), "Budget deleted"); } }
+                                                        }
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
                                     Rectangle { Layout.fillWidth: true; implicitHeight: 1; color: root.line }

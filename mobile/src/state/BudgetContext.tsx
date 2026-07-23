@@ -45,8 +45,9 @@ import {
   startReceiving,
   refreshRoutes,
   stopNode,
+  getRx,
 } from "../lib/delivery";
-import { ensureSecret, saveSecret, loadIdentity } from "../lib/identityStore";
+import { ensureSecret, saveSecret, loadIdentity, deleteSecret } from "../lib/identityStore";
 
 // UI-facing sync state. "offline" covers the emulator/web (no native .so) and any
 // node bring-up failure; "not paired" means there is no household secret yet.
@@ -94,6 +95,7 @@ interface BudgetContextValue {
   selectBudget: (id: string) => Promise<void>;
   createBudget: (name: string) => Promise<void>;
   joinBudget: (name: string, code: string) => Promise<void>;
+  deleteBudget: (id: string) => Promise<void>;
   refreshBudgetColors: () => Promise<void>;
   addAccount: (
     name: string,
@@ -118,6 +120,7 @@ interface BudgetContextValue {
   syncError: string | null;
   reconnect: () => Promise<void>;
   syncNow: () => Promise<void>;
+  rxInfo: { seen: number; opened: number };
   /** Live peer counts, or null when unavailable. See getPeerCount(). */
   peerInfo: { peers: number; mesh: number } | null;
 }
@@ -156,6 +159,7 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
   const [syncError, setSyncError] = useState<string | null>(null);
   const [retryTick, setRetryTick] = useState(0);   // bump to re-attempt the node bring-up
   const [peerInfo, setPeerInfo] = useState<{ peers: number; mesh: number } | null>(null);
+  const [rxInfo, setRxInfo] = useState<{ seen: number; opened: number }>({ seen: 0, opened: 0 });
   const clockRef = useRef<Clock | null>(null);
   // Always-current view of the log for the receive callback (which is registered
   // once and otherwise would capture a stale `events`) and for best-effort sends.
@@ -214,10 +218,8 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
     await saveSettings({ budgetCurrency: budgetCurrencyRef.current, authorName: n });
   }, []);
 
-  // Poll live connectivity while the node is up. "syncing" alone can't tell a
-  // healthy node from an isolated one. As a light node the health signal is the
-  // FILTER peer count — 0 filter peers means no service node is pushing messages
-  // to us, so we receive nothing. Cheap local getter; stops when we leave "syncing".
+  // Poll live connectivity while the node is up: peer count (mesh health) and the
+  // rx counters (whether anything is actually arriving over the mesh).
   useEffect(() => {
     if (syncStatus !== "syncing") {
       setPeerInfo(null);
@@ -226,7 +228,7 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
     let alive = true;
     const tick = async () => {
       const info = await getPeerCount();
-      if (alive) setPeerInfo(info);
+      if (alive) { setPeerInfo(info); setRxInfo(getRx()); }
     };
     tick();
     const h = setInterval(tick, 5000);
@@ -429,6 +431,28 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
     sendSyncReq(deviceIdRef.current).catch(() => {});
     reserveBudget(currentBudgetIdRef.current).catch(() => {});
   }, [reserveBudget]);
+
+  // Permanently delete a budget on THIS device: drop its log, forget its household
+  // key, and remove it from the registry. Destructive — the UI confirms hard. If it
+  // was the current one, switch to another. Refuses to delete your only budget.
+  const deleteBudget = useCallback(async (id: string) => {
+    const reg = await loadRegistry();
+    if (reg.budgets.length <= 1) throw new Error("Can't delete your only budget.");
+    const remaining = reg.budgets.filter((b) => b.id !== id);
+    const nextCurrent = reg.current === id ? remaining[0].id : reg.current;
+    await saveRegistry({ current: nextCurrent, budgets: remaining });
+    await clearBudgetLog(id);
+    await deleteSecret(id);
+    setBudgets(remaining);
+    if (currentBudgetIdRef.current === id) {
+      const log = await loadBudgetLog(nextCurrent);
+      currentBudgetIdRef.current = nextCurrent;
+      setCurrentBudgetId(nextCurrent);
+      eventsRef.current = log;
+      setEvents(log);
+    }
+    refreshRoutes().catch(() => {}); // stop syncing the removed topic
+  }, []);
 
   // Sync bring-up: register the receiver and mark ourselves online once the node
   // is up. Everything is wrapped so unpaired / emulator / no-peers degrades to
@@ -800,6 +824,7 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
     selectBudget,
     createBudget,
     joinBudget,
+    deleteBudget,
     refreshBudgetColors,
     addAccount,
     addCategory,
@@ -817,6 +842,7 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
     syncError,
     reconnect,
     syncNow,
+    rxInfo,
     peerInfo,
   };
 

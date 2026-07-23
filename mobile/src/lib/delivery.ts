@@ -99,6 +99,12 @@ function utf8Decode(bytes: Uint8Array): string {
 interface Route { budgetId: string; id: Identity; topic: string }
 let node: { ctx: string } | null = null;
 let didSetup = false;   // LogosMessaging.setup() is process-wide — run it only once
+// Receive diagnostics: rxSeen = payloads that reached us over the mesh; rxOpened =
+// those that decrypted with one of our budget keys. rxSeen 0 ⇒ nothing is arriving
+// (no peer on our topic, or the mesh isn't delivering). rxSeen > 0 but rxOpened 0 ⇒
+// traffic is there but not ours (wrong key/topic).
+let rxSeen = 0, rxOpened = 0;
+export function getRx(): { seen: number; opened: number } { return { seen: rxSeen, opened: rxOpened }; }
 let routes: Route[] = [];
 let starting: Promise<{ ctx: string }> | null = null;
 let emitter: NativeEventEmitter | null = null;
@@ -288,6 +294,7 @@ export function startReceiving(
       const ffi = JSON.parse(raw);
       const payloadB64 = findPayload(ffi);
       if (!payloadB64) return;
+      rxSeen++; // a message with a payload reached us over the mesh
       const sealed = toByteArray(payloadB64);
       // Route by decryption: try each budget's key. open() is AAD-bound to that
       // budget's topic and authenticated, so exactly the owning budget decrypts;
@@ -299,6 +306,7 @@ export function startReceiving(
         } catch {
           continue; // not this budget's message
         }
+        rxOpened++; // decrypted with one of our budget keys → it's ours
         const env = JSON.parse(utf8Decode(plaintext));
         if (env && env.type === "EVENT" && env.event) {
           onEvent(r.budgetId, env.event as KymEvent);

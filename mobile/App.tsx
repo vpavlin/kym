@@ -57,7 +57,7 @@ function SyncIndicator() {
 // always know which household you're in — the #1 multi-budget UX rule), tap to
 // switch or create. Mirrors the desktop's colored switcher.
 function BudgetSwitcher() {
-  const { budgets, currentBudgetId, currentBudgetName, currentBudgetColor, selectBudget, createBudget, joinBudget } =
+  const { budgets, currentBudgetId, currentBudgetName, currentBudgetColor, selectBudget, createBudget, joinBudget, deleteBudget } =
     useBudget();
   const [open, setOpen] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -103,6 +103,28 @@ function BudgetSwitcher() {
     setScanning(true);
   };
 
+  // Delete a budget — strong confirmation (it forgets the household key locally).
+  const confirmDelete = (b: { id: string; name: string }) => {
+    Alert.alert(
+      `Delete “${b.name}”?`,
+      "This removes the budget and its household key FROM THIS DEVICE. If it's shared, other devices keep their copy — you'd re-join with its code to get it back here. This can't be undone.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              await deleteBudget(b.id);
+            } catch (e: any) {
+              Alert.alert("Couldn't delete", e?.message ?? String(e));
+            }
+          },
+        },
+      ]
+    );
+  };
+
   return (
     <>
       <Pressable style={[styles.pill, { borderColor: currentBudgetColor }]} onPress={() => setOpen(true)}>
@@ -118,18 +140,24 @@ function BudgetSwitcher() {
           <Pressable style={styles.switchSheet} onPress={() => {}}>
             <Text style={styles.switchTitle}>Budgets</Text>
             {budgets.map((b) => (
-              <Pressable
-                key={b.id}
-                style={styles.switchRow}
-                onPress={async () => {
-                  await selectBudget(b.id);
-                  closeAll();
-                }}
-              >
-                <View style={[styles.pillDot, { backgroundColor: b.color }]} />
-                <Text style={styles.switchRowText}>{b.name}</Text>
-                {b.id === currentBudgetId ? <Text style={[styles.switchCheck, { color: currentBudgetColor }]}>✓</Text> : null}
-              </Pressable>
+              <View key={b.id} style={styles.switchRow}>
+                <Pressable
+                  style={{ flexDirection: "row", alignItems: "center", gap: 10, flex: 1 }}
+                  onPress={async () => {
+                    await selectBudget(b.id);
+                    closeAll();
+                  }}
+                >
+                  <View style={[styles.pillDot, { backgroundColor: b.color }]} />
+                  <Text style={styles.switchRowText}>{b.name}</Text>
+                  {b.id === currentBudgetId ? <Text style={[styles.switchCheck, { color: currentBudgetColor }]}>✓</Text> : null}
+                </Pressable>
+                {budgets.length > 1 ? (
+                  <Pressable hitSlop={10} onPress={() => confirmDelete(b)} style={{ paddingHorizontal: 8 }}>
+                    <Text style={{ color: theme.danger, fontSize: 18 }}>🗑</Text>
+                  </Pressable>
+                ) : null}
+              </View>
             ))}
 
             {/* Create a fresh budget (you host it). */}
