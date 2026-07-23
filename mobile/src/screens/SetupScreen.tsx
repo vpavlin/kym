@@ -366,12 +366,17 @@ export function SetupScreen() {
               (peerInfo.mesh > 0 ? ` · mesh ${peerInfo.mesh}` : "")
             : ""}
         </Text>
+        {peerInfo ? (
+          <Text style={styles.note}>
+            Shard: {peerInfo.shard} (desktop is on 2/7 — they must match)
+          </Text>
+        ) : null}
         {/* Received-message counters: seen = arrived over the mesh, opened = decrypted
             with one of our budget keys. seen 0 → nothing is reaching us (no peer on
             this budget's topic, or the mesh isn't delivering). */}
         <Text style={styles.note}>
-          Received: {rxInfo.seen} seen · {rxInfo.opened} for our budgets
-          {rxInfo.seen === 0 ? " — nothing arriving yet (is a peer online + sharing this budget?)" : ""}
+          Sent: {rxInfo.sent} · Received: {rxInfo.seen} seen / {rxInfo.opened} ours
+          {rxInfo.seen === 0 ? " — nothing arriving" : ""}
         </Text>
         {syncError ? (
           <Text style={[styles.note, { color: theme.warn }]}>{syncError}</Text>

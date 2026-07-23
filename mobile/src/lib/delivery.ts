@@ -103,8 +103,10 @@ let didSetup = false;   // LogosMessaging.setup() is process-wide — run it onl
 // those that decrypted with one of our budget keys. rxSeen 0 ⇒ nothing is arriving
 // (no peer on our topic, or the mesh isn't delivering). rxSeen > 0 but rxOpened 0 ⇒
 // traffic is there but not ours (wrong key/topic).
-let rxSeen = 0, rxOpened = 0;
-export function getRx(): { seen: number; opened: number } { return { seen: rxSeen, opened: rxOpened }; }
+let rxSeen = 0, rxOpened = 0, txSent = 0;
+export function getRx(): { seen: number; opened: number; sent: number } {
+  return { seen: rxSeen, opened: rxOpened, sent: txSent };
+}
 let routes: Route[] = [];
 let starting: Promise<{ ctx: string }> | null = null;
 let emitter: NativeEventEmitter | null = null;
@@ -152,6 +154,10 @@ export async function ensureNode(onStatus?: (s: string) => void): Promise<string
     // accept a filter lease. Minimal on purpose: the light-client fields
     // (filter/lightpush/store + pinned service nodes) are what made waku_new reject
     // the config → "offline". Don't add them back.
+    // EXACTLY the config the Perun mobile app uses to talk to its Basecamp module
+    // (same fleet, same native liblogosdelivery). KYM's native + subscribe path is
+    // byte-identical to Perun's, so this is the proven-working setup. No clusterId /
+    // shard pinning — the preset + auto-sharding handle it.
     const config = {
       mode: "Core",
       preset: "logos.dev",
@@ -216,6 +222,7 @@ export async function sendEnvelope(event: KymEvent, budgetId: string): Promise<v
     ephemeral: false,
   });
   await LogosMessaging.send(node!.ctx, messageJson);
+  txSent++; // published to the fleet (lightpush/relay)
 }
 
 /**
@@ -335,7 +342,7 @@ export function startReceiving(
  *   libp2p_peers - transport peers (connections to the fleet + discovered)
  * Returns null when unavailable (older bridge, no node) so callers can hide it.
  */
-export async function getPeerCount(): Promise<{ peers: number; mesh: number } | null> {
+export async function getPeerCount(): Promise<{ peers: number; mesh: number; shard: string } | null> {
   if (!LogosMessaging || !node) return null;
   if (typeof (LogosMessaging as any).getNodeInfo !== "function") return null; // pre-0.8 bridge
   try {
@@ -343,15 +350,20 @@ export async function getPeerCount(): Promise<{ peers: number; mesh: number } | 
     if (typeof metrics !== "string" || !metrics) return null;
     let peers = -1;
     let mesh = 0;
+    const shards = new Set<string>();
     for (const raw of metrics.split("\n")) {
       const line = raw.trim();
+      // Whatever pubsub shard(s) we're actually on — this is the number to compare
+      // against the desktop's /waku/2/rs/2/7. If it differs, that's the mismatch.
+      const sm = line.match(/\/waku\/2\/rs\/\d+\/\d+/g);
+      if (sm) sm.forEach((s) => shards.add(s.replace("/waku/2/rs/", "")));
       if (!line || line.startsWith("#")) continue;
       const value = Number(line.slice(line.lastIndexOf(" ") + 1));
       if (!Number.isFinite(value)) continue;
       if (line.startsWith("libp2p_peers ")) peers = Math.trunc(value);
       else if (line.includes("gossipsub") && line.includes("mesh")) mesh += Math.trunc(value);
     }
-    return peers < 0 ? null : { peers, mesh };
+    return peers < 0 ? null : { peers, mesh, shard: [...shards].join(",") || "?" };
   } catch {
     return null; // node down / metrics unavailable — not worth surfacing as an error
   }
