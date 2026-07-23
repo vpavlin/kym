@@ -44,8 +44,6 @@ import {
   sendSyncReq,
   startReceiving,
   refreshRoutes,
-  activeFilterRegion,
-  rotateFilternode,
   stopNode,
 } from "../lib/delivery";
 import { ensureSecret, saveSecret, loadIdentity } from "../lib/identityStore";
@@ -119,8 +117,9 @@ interface BudgetContextValue {
   syncStatus: SyncStatus;
   syncError: string | null;
   reconnect: () => Promise<void>;
+  syncNow: () => Promise<void>;
   /** Live peer counts, or null when unavailable. See getPeerCount(). */
-  peerInfo: { peers: number; filter: number } | null;
+  peerInfo: { peers: number; mesh: number } | null;
 }
 
 const BudgetContext = createContext<BudgetContextValue | null>(null);
@@ -156,7 +155,7 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
   const [syncStatus, setSyncStatus] = useState<SyncStatus>("offline");
   const [syncError, setSyncError] = useState<string | null>(null);
   const [retryTick, setRetryTick] = useState(0);   // bump to re-attempt the node bring-up
-  const [peerInfo, setPeerInfo] = useState<{ peers: number; filter: number } | null>(null);
+  const [peerInfo, setPeerInfo] = useState<{ peers: number; mesh: number } | null>(null);
   const clockRef = useRef<Clock | null>(null);
   // Always-current view of the log for the receive callback (which is registered
   // once and otherwise would capture a stale `events`) and for best-effort sends.
@@ -412,18 +411,24 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
     }
   }, [selectBudget]);
 
-  // Manual reconnect that rotates to the next fleet region — the safe, user-driven
-  // version of the auto-rotation (which crashed by restarting the native node in a
-  // loop). One deliberate restart; setup() is not re-run. Use it to hunt for a
-  // region that actually serves our filter subscription ("filter 0" → try another).
+  // Manual reconnect: tear the node down and bring it back up (one deliberate
+  // restart; setup() is not re-run). Use it if the mesh looks stuck.
   const reconnect = useCallback(async () => {
     try { await stopNode(); } catch { /* ignore */ }
-    rotateFilternode();
     retryCountRef.current = 0;
     setSyncStatus("connecting");
     setSyncError(null);
     setRetryTick((t) => t + 1);
   }, []);
+
+  // Manual "Sync now": ask every household to re-serve anything we're missing AND
+  // re-broadcast our current budget's log (belt-and-suspenders pull + push). Safe
+  // to tap repeatedly — peers dedup by event id.
+  const syncNow = useCallback(async () => {
+    if (!syncActiveRef.current) return;
+    sendSyncReq(deviceIdRef.current).catch(() => {});
+    reserveBudget(currentBudgetIdRef.current).catch(() => {});
+  }, [reserveBudget]);
 
   // Sync bring-up: register the receiver and mark ourselves online once the node
   // is up. Everything is wrapped so unpaired / emulator / no-peers degrades to
@@ -459,7 +464,7 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
         await ensureNode(); // throws NOT_PAIRED if no budget has a household key
         if (!alive) return;
         setSyncStatus("syncing");
-        setSyncError(`region ${activeFilterRegion()}`);
+        setSyncError(null);
         sendSyncReq(deviceIdRef.current).catch(() => {}); // pull anything we're missing
       } catch (e: any) {
         // NOT_PAIRED, UnsatisfiedLinkError (arm64 .so on x86_64), a rejected config,
@@ -811,6 +816,7 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
     syncStatus,
     syncError,
     reconnect,
+    syncNow,
     peerInfo,
   };
 

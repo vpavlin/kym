@@ -2,7 +2,7 @@
   "expo": {
     "name": "KYM",
     "slug": "kym",
-    "version": "0.13.6",
+    "version": "0.13.7",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "scheme": "kym",
@@ -11,7 +11,7 @@
     },
     "android": {
       "package": "co.logos.kym",
-      "versionCode": 19,
+      "versionCode": 20,
       "predictiveBackGestureEnabled": false
     },
     "ios": {

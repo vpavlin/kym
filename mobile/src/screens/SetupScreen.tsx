@@ -39,6 +39,7 @@ export function SetupScreen() {
     currentBudgetColor,
     syncError,
     reconnect,
+    syncNow,
   } = useBudget();
   const styles = useMemo(() => makeStyles(currentBudgetColor), [currentBudgetColor]);
 
@@ -355,22 +356,26 @@ export function SetupScreen() {
       <Text style={styles.section}>Sync &amp; device</Text>
       <View style={styles.card}>
         <Text style={styles.note}>This device's id: {deviceId}</Text>
-        {/* Connectivity. "syncing" only means the node started — the peer/mesh
-            counts are what say whether anything can actually reach us. */}
+        {/* Connectivity. Relay node: "syncing" means the mesh is up; the peer count
+            is how many nodes we're connected to. */}
         <Text style={styles.note}>
           Sync: {syncStatus}
-          {peerInfo ? ` · ${peerInfo.peers} ${peerInfo.peers === 1 ? "peer" : "peers"}` : ""}
+          {peerInfo
+            ? ` · ${peerInfo.peers} ${peerInfo.peers === 1 ? "peer" : "peers"}` +
+              (peerInfo.mesh > 0 ? ` · mesh ${peerInfo.mesh}` : "")
+            : ""}
         </Text>
         {syncError ? (
           <Text style={[styles.note, { color: theme.warn }]}>{syncError}</Text>
         ) : null}
-        <Pressable style={[styles.secondary, { marginTop: 8 }]} onPress={() => reconnect()}>
-          <Text style={styles.secondaryText}>Reconnect (try another region)</Text>
-        </Pressable>
-        <Text style={styles.note}>
-          If it connects but nothing arrives (“filter 0”), the fleet region isn’t serving us —
-          tap Reconnect to try the next one.
-        </Text>
+        <View style={{ flexDirection: "row", gap: 8, marginTop: 8 }}>
+          <Pressable style={[styles.primary, { flex: 1, marginTop: 0 }]} onPress={() => syncNow()}>
+            <Text style={styles.primaryText}>Sync now</Text>
+          </Pressable>
+          <Pressable style={[styles.secondary, { flex: 1, marginTop: 0 }]} onPress={() => reconnect()}>
+            <Text style={styles.secondaryText}>Reconnect</Text>
+          </Pressable>
+        </View>
       </View>
 
       {/* Danger zone. */}

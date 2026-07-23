@@ -34,14 +34,6 @@ const BOOTSTRAP = [
   "/dns4/delivery-02.ac-cn-hongkong-c.logos.dev.status.im/tcp/30303/p2p/16Uiu2HAkvwhGHKNry6LACrB8TmEFoCJKEX29XR5dDUzk3UT3UNSE",
 ];
 
-// The fleet node this light client uses for its client protocols. filternode /
-// lightpushnode / storenode each take a SINGLE peer multiaddr (unlike entryNodes,
-// which is a discovery list) — the Edge node connected to the fleet for discovery
-// but selected no filter/lightpush peer on its own ("filter 0"), so we name one.
-// do-ams3 is the closest fleet region; it is also in BOOTSTRAP for discovery.
-const SERVICE_NODE =
-  "/dns4/delivery-01.do-ams3.logos.dev.status.im/tcp/30303/p2p/16Uiu2HAmTUbnxLGT9JvV6mu9oPyDjqHK4Phs1VDJNUgESgNSkuby";
-
 /** True if the native module is present in this build at all. */
 export function deliveryAvailable(): boolean {
   return !!LogosMessaging;
@@ -111,20 +103,6 @@ let routes: Route[] = [];
 let starting: Promise<{ ctx: string }> | null = null;
 let emitter: NativeEventEmitter | null = null;
 
-// Which fleet node we pin as the filter service. "filter 0" = the pinned node
-// isn't serving our subscription (region down / at capacity), so we can rotate
-// through the fleet's regions until one serves us. rotateFilternode() advances the
-// choice; the caller restarts the node to apply it.
-let filterIdx = 0;
-export function activeFilternode(): string { return BOOTSTRAP[filterIdx % BOOTSTRAP.length]; }
-export function rotateFilternode(): void { filterIdx++; }
-export function filternodeCount(): number { return BOOTSTRAP.length; }
-// A short region label for the diagnostics line (e.g. "do-ams3").
-export function activeFilterRegion(): string {
-  const m = activeFilternode().match(/delivery-\d+\.([a-z0-9-]+)\.logos/i);
-  return m ? m[1] : "unknown";
-}
-
 // Build a route per budget that HAS a household secret (paired or self-hosted).
 async function buildRoutes(): Promise<Route[]> {
   const reg = await loadRegistry();
@@ -161,50 +139,36 @@ export async function ensureNode(onStatus?: (s: string) => void): Promise<string
     // setup() initialises the native lib process-wide; call it ONCE. Re-running it
     // on every reconnect (e.g. a retry) can crash the native layer.
     if (!didSetup) { await LogosMessaging.setup(); didSetup = true; }
-    // LIGHT CLIENT (Edge). We briefly tried relay (mode:"Core", relay:true) but the
-    // native lib REJECTS that config (waku_new returns null → "offline") — a mobile
-    // relay needs shard/pubsub config the light build doesn't supply. So we're a
-    // Waku light client against the logos.dev fleet: lightpush to publish, filter to
-    // receive (a service node pushes matching messages to us), store for later
-    // backfill. The known weak spot is filter: if no service node serves our
-    // subscription the phone connects but RECEIVES nothing ("filter 0"). We pin a
-    // service node for each client protocol and try SEVERAL filternodes below.
+    // RELAY node. This is the config that worked before we detoured through a Waku
+    // light client (Edge + filter), which the fleet never reliably served ("filter
+    // 0"). As a RELAY node we connect to ALL bootstrap peers, discover more, join
+    // the gossip mesh, and receive by mesh membership — no service node has to
+    // accept a filter lease. Minimal on purpose: the light-client fields
+    // (filter/lightpush/store + pinned service nodes) are what made waku_new reject
+    // the config → "offline". Don't add them back.
     const config = {
-      mode: "Edge",
+      mode: "Core",
       preset: "logos.dev",
-      relay: false,
-      lightpush: true,
-      filter: true,
-      store: true,
+      relay: true,
       entryNodes: BOOTSTRAP,
-      filternode: activeFilternode(),   // rotated on persistent "filter 0"
-      lightpushnode: SERVICE_NODE,
-      storenode: SERVICE_NODE,
     };
     const c: string = await LogosMessaging.new(config);
-    onStatus?.("Connecting to logos.dev…");
+    onStatus?.("Joining mesh…");
     await LogosMessaging.start(c);
-    // Subscribe by CONTENT topic — logosdelivery_subscribe auto-shards it and,
-    // with relay off + filter on, routes through FILTER (recv_service) rather
-    // than relay. relaySubscribe() is the low-level pubsub-topic call and is only
-    // a fallback for an older bridge.
-    // Subscribe EVERY budget's content topic (one filter subscription each).
-    const sub = (LogosMessaging as any).subscribeContentTopic;
-    for (const r of routes) {
-      if (typeof sub === "function") await sub(c, r.topic);
-      else await LogosMessaging.relaySubscribe(c, r.topic);
-    }
-    onStatus?.("Connecting to service node…");
+    // Subscribe EVERY budget's topic on the relay mesh (pubsub subscribe, not the
+    // filter/content-topic path). Idempotent.
+    for (const r of routes) await LogosMessaging.relaySubscribe(c, r.topic);
+    onStatus?.("Forming mesh…");
     await new Promise((r) => setTimeout(r, SETTLE_MS));
     const n = { ctx: c };
     node = n;
-    // Keep every budget's filter lease alive (see FILTER_RENEW_MS). Re-subscribe
-    // all topics on a timer so a dropped/expired lease self-heals.
+    // Re-subscribe periodically so a new budget's topic (added via refreshRoutes)
+    // and any dropped subscription self-heal. Idempotent on the relay mesh.
     if (renewTimer) clearInterval(renewTimer);
-    if (typeof sub === "function") {
+    {
       renewTimer = setInterval(() => {
         for (const r of routes) {
-          sub(n.ctx, r.topic).catch(() => {
+          LogosMessaging.relaySubscribe(n.ctx, r.topic).catch(() => {
             /* transient — the next tick retries; node stays up */
           });
         }
@@ -252,10 +216,7 @@ export async function sendEnvelope(event: KymEvent, budgetId: string): Promise<v
 export async function refreshRoutes(): Promise<void> {
   if (!node) return;
   routes = await buildRoutes();
-  const sub = (LogosMessaging as any).subscribeContentTopic;
-  if (typeof sub === "function") {
-    for (const r of routes) await sub(node.ctx, r.topic).catch(() => {});
-  }
+  for (const r of routes) await LogosMessaging.relaySubscribe(node.ctx, r.topic).catch(() => {});
 }
 
 /**
@@ -355,32 +316,29 @@ export function startReceiving(
 }
 
 /**
- * Live connectivity, parsed from the node's Prometheus metrics. As a LIGHT node
- * there is no gossip mesh (relay is off), so the mesh gauge is always 0 and would
- * be misleading. What matters instead is whether we have a FILTER service peer —
- * that is the node pushing messages to us; with 0 filter peers we receive nothing.
- *   libp2p_peers      - transport peers (connections to the fleet)
- *   waku_filter_peers - service nodes serving our filter subscription
- * `filter` is the light-node health signal, the way `mesh` was for a relay node.
+ * Live connectivity, parsed from the node's Prometheus metrics. As a RELAY node the
+ * health signal is simply how many peers we're connected to (the mesh forms from
+ * them); `mesh` counts gossipsub-mesh peers when the gauge is exposed.
+ *   libp2p_peers - transport peers (connections to the fleet + discovered)
  * Returns null when unavailable (older bridge, no node) so callers can hide it.
  */
-export async function getPeerCount(): Promise<{ peers: number; filter: number } | null> {
+export async function getPeerCount(): Promise<{ peers: number; mesh: number } | null> {
   if (!LogosMessaging || !node) return null;
   if (typeof (LogosMessaging as any).getNodeInfo !== "function") return null; // pre-0.8 bridge
   try {
     const metrics: string = await (LogosMessaging as any).getNodeInfo(node.ctx, "Metrics");
     if (typeof metrics !== "string" || !metrics) return null;
     let peers = -1;
-    let filter = 0;
+    let mesh = 0;
     for (const raw of metrics.split("\n")) {
       const line = raw.trim();
       if (!line || line.startsWith("#")) continue;
       const value = Number(line.slice(line.lastIndexOf(" ") + 1));
       if (!Number.isFinite(value)) continue;
       if (line.startsWith("libp2p_peers ")) peers = Math.trunc(value);
-      else if (line.startsWith("waku_filter_peers")) filter += Math.trunc(value);
+      else if (line.includes("gossipsub") && line.includes("mesh")) mesh += Math.trunc(value);
     }
-    return peers < 0 ? null : { peers, filter };
+    return peers < 0 ? null : { peers, mesh };
   } catch {
     return null; // node down / metrics unavailable — not worth surfacing as an error
   }
