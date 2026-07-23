@@ -1434,6 +1434,16 @@ void KymCoreImpl::maybeAutoResync(Budget &b) {
     if (b.lastAutoResync != 0 && now - b.lastAutoResync < 30000) return;
     b.lastAutoResync = now;
     sendSummary(b);   // reconcile: peers send only the events we lack, and vice versa
+    // RBSR needs BOTH peers to talk: exchange summaries, then send diffs. A mobile
+    // peer can RECEIVE but its publishes don't propagate through the gossip mesh, so
+    // it can never trigger a reconcile — it just sees summaries and starves. So
+    // EVERY node (Basecamp desktop AND the hub) also PUSHES its whole log every
+    // ~60s; a receive-only device dedups by id and catches up. Cheap for a household
+    // budget; the RBSR path still handles the efficient desktop↔desktop case.
+    if (b.lastFullServe == 0 || now - b.lastFullServe >= 60000) {
+        b.lastFullServe = now;
+        for (const auto &e : b.log) sealAndSend(b, e);
+    }
 }
 
 std::string KymCoreImpl::resync() {

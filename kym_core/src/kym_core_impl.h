@@ -145,7 +145,7 @@ private:
         std::string currency = "CZK";
         int64_t wall = 0, ctr = 0;
         std::string viewMonth;                       // "" = live month, else the YYYY-MM viewed
-        int64_t lastAutoResync = 0, lastSummaryTx = 0;
+        int64_t lastAutoResync = 0, lastSummaryTx = 0, lastFullServe = 0;
         std::string seedCatId; int seedTicks = 0;    // hub demo seed (per budget)
     };
 
