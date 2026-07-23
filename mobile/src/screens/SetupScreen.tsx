@@ -375,9 +375,13 @@ export function SetupScreen() {
             with one of our budget keys. seen 0 → nothing is reaching us (no peer on
             this budget's topic, or the mesh isn't delivering). */}
         <Text style={styles.note}>
-          Sent: {rxInfo.sent} · Received: {rxInfo.seen} seen / {rxInfo.opened} ours
-          {rxInfo.seen === 0 ? " — nothing arriving" : ""}
+          Sent: {rxInfo.sent} · raw: {rxInfo.raw} · payload: {rxInfo.seen} · ours: {rxInfo.opened}
         </Text>
+        {rxInfo.raw > 0 && rxInfo.opened === 0 && rxInfo.sample ? (
+          <Text style={[styles.note, { fontFamily: "monospace", fontSize: 10 }]} numberOfLines={3}>
+            {rxInfo.sample}
+          </Text>
+        ) : null}
         {syncError ? (
           <Text style={[styles.note, { color: theme.warn }]}>{syncError}</Text>
         ) : null}

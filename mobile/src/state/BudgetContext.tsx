@@ -120,7 +120,7 @@ interface BudgetContextValue {
   syncError: string | null;
   reconnect: () => Promise<void>;
   syncNow: () => Promise<void>;
-  rxInfo: { seen: number; opened: number; sent: number };
+  rxInfo: { seen: number; opened: number; sent: number; raw: number; sample: string };
   /** Live peer counts, or null when unavailable. See getPeerCount(). */
   peerInfo: { peers: number; mesh: number; shard: string } | null;
 }
@@ -159,7 +159,7 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
   const [syncError, setSyncError] = useState<string | null>(null);
   const [retryTick, setRetryTick] = useState(0);   // bump to re-attempt the node bring-up
   const [peerInfo, setPeerInfo] = useState<{ peers: number; mesh: number; shard: string } | null>(null);
-  const [rxInfo, setRxInfo] = useState<{ seen: number; opened: number; sent: number }>({ seen: 0, opened: 0, sent: 0 });
+  const [rxInfo, setRxInfo] = useState<{ seen: number; opened: number; sent: number; raw: number; sample: string }>({ seen: 0, opened: 0, sent: 0, raw: 0, sample: "" });
   const clockRef = useRef<Clock | null>(null);
   // Always-current view of the log for the receive callback (which is registered
   // once and otherwise would capture a stale `events`) and for best-effort sends.

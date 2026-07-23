@@ -103,9 +103,9 @@ let didSetup = false;   // LogosMessaging.setup() is process-wide — run it onl
 // those that decrypted with one of our budget keys. rxSeen 0 ⇒ nothing is arriving
 // (no peer on our topic, or the mesh isn't delivering). rxSeen > 0 but rxOpened 0 ⇒
 // traffic is there but not ours (wrong key/topic).
-let rxSeen = 0, rxOpened = 0, txSent = 0;
-export function getRx(): { seen: number; opened: number; sent: number } {
-  return { seen: rxSeen, opened: rxOpened, sent: txSent };
+let rxSeen = 0, rxOpened = 0, txSent = 0, rxRaw = 0, rxSample = "";
+export function getRx(): { seen: number; opened: number; sent: number; raw: number; sample: string } {
+  return { seen: rxSeen, opened: rxOpened, sent: txSent, raw: rxRaw, sample: rxSample };
 }
 let routes: Route[] = [];
 let starting: Promise<{ ctx: string }> | null = null;
@@ -299,33 +299,51 @@ export function startReceiving(
   if (!LogosMessaging) return () => {};
   if (!emitter) emitter = new NativeEventEmitter(LogosMessaging);
   const sub = emitter.addListener("logosMessage", (evt: { wakuPtr?: string; event?: string }) => {
+    rxRaw++; // the native lib fired the callback AT ALL (relay receive works if this climbs)
+    if (!rxSample && evt?.event) rxSample = String(evt.event).slice(0, 160);
     if (!node) return; // node not up yet — nothing to decrypt against
     try {
       const raw = evt?.event;
       if (!raw) return;
-      const ffi = JSON.parse(raw);
-      const payloadB64 = findPayload(ffi);
-      if (!payloadB64) return;
-      rxSeen++; // a message with a payload reached us over the mesh
-      const sealed = toByteArray(payloadB64);
-      // Route by decryption: try each budget's key. open() is AAD-bound to that
-      // budget's topic and authenticated, so exactly the owning budget decrypts;
-      // everything else (foreign traffic, other households) throws and we skip it.
-      for (const r of routes) {
-        let plaintext: Uint8Array;
-        try {
-          plaintext = open(r.id, sealed, r.topic);
-        } catch {
-          continue; // not this budget's message
+      const m = JSON.parse(raw);
+      // The WakuMessage sits under wakuMessage / message / the root (matches
+      // Alisher's receiver-android reference). Its `payload` is delivered as a
+      // BYTE ARRAY (number[]) — NOT a base64 string. The OLD findPayload only
+      // accepted a string, so it dropped every received message ("rxSeen 0").
+      const wm = m.wakuMessage || m.message || m;
+      const payload = wm && wm.payload != null ? wm.payload : m.payload;
+      if (payload == null) return;
+      rxSeen++; // a WakuMessage with a payload reached us over the mesh
+      // Build candidate sealed-bytes. We sent payload = base64(sealed); the native
+      // may deliver back either the raw base64-string bytes OR the decoded sealed
+      // bytes, so try both — open() is authenticated, only the right one decrypts.
+      const candidates: Uint8Array[] = [];
+      if (Array.isArray(payload)) {
+        let s = "";
+        for (let i = 0; i < payload.length; i++) s += String.fromCharCode(payload[i] & 0xff);
+        try { candidates.push(toByteArray(s)); } catch { /* not base64 text */ }
+        candidates.push(Uint8Array.from(payload.map((b: number) => b & 0xff)));
+      } else if (typeof payload === "string") {
+        try { candidates.push(toByteArray(payload)); } catch { /* not base64 */ }
+      }
+      // Route by decryption: for each candidate, try each budget's key.
+      for (const sealed of candidates) {
+        for (const r of routes) {
+          let plaintext: Uint8Array;
+          try {
+            plaintext = open(r.id, sealed, r.topic);
+          } catch {
+            continue; // not this candidate/budget
+          }
+          rxOpened++; // decrypted with one of our budget keys → it's ours
+          const env = JSON.parse(utf8Decode(plaintext));
+          if (env && env.type === "EVENT" && env.event) {
+            onEvent(r.budgetId, env.event as KymEvent);
+          } else if (env && env.type === "SYNC_REQ") {
+            onSyncReq?.(r.budgetId, typeof env.from === "string" ? env.from : "");
+          }
+          return; // matched — done
         }
-        rxOpened++; // decrypted with one of our budget keys → it's ours
-        const env = JSON.parse(utf8Decode(plaintext));
-        if (env && env.type === "EVENT" && env.event) {
-          onEvent(r.budgetId, env.event as KymEvent);
-        } else if (env && env.type === "SYNC_REQ") {
-          onSyncReq?.(r.budgetId, typeof env.from === "string" ? env.from : "");
-        }
-        return; // matched the owning budget — done
       }
     } catch {
       // Drop anything we can't decrypt/parse. Safety net for foreign traffic and
