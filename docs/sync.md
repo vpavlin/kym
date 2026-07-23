@@ -34,7 +34,9 @@ fingerprint  = pgpWords(SHA-256(K)[0..2])
 - **`Ke`** — the AEAD content key. Separate from `K` so the wire key is never the same
   bytes as the topic-HMAC key.
 - **`topic`** — the content topic is an **HMAC of `K`**, not a fixed string, so the topic
-  itself leaks nothing about the household and is unlinkable across households. `epoch`
+  *value* reveals nothing about the household and is unlinkable across households. (This
+  hides the topic contents only; it does not hide transport **metadata** — that a message
+  was sent, when, and from which network address — which is future work via Nym.) `epoch`
   (0 in phase 1) is the hook for future topic rotation.
 - **`fingerprint`** — the first 3 bytes of `SHA-256(K)` rendered as pgp-words, shown on
   both screens during pairing so the two humans can confirm out loud they derived the same
@@ -182,10 +184,17 @@ hub's re-served events. Because the log is append-only and merge is idempotent, 
 trivially safe: the peer simply unions in whatever it was missing and dedups the rest.
 
 - v1: naive "re-send the log" (`backfill()` returns every sealed event).
-- later: a Merkle-tree diff so peers exchange only the events one is missing, once logs grow.
+- **v2 (algorithm built): range-based set reconciliation** (`packages/sync/src/reconcile.mjs`) — peers exchange small fingerprints over sorted ranges of their event-id set and transfer only the missing events (~d/n of resend-all bandwidth in the common case). The pure algorithm is implemented + tested; the wire/session layer that carries it over Delivery is planned. See `research-reliability.md` and ADR #17.
 
 This is the fix for Perun's "the phone is the only durable copy of a run" gap. An optional
 Logos **Storage/Codex** encrypted backup of the log is a later, module-side, off-hot-path extra.
+
+### Reliability assumptions (be explicit — these are the load-bearing conditions)
+1. **At least one durable, usually-online holder per budget** (the hub) — no Store means catch-up needs a peer that has the events; two devices *never* online together can't sync. The hub can be **headless** (a Logos core module under `logoscore`, no Basecamp GUI — ADR #17), and is an **availability** role, not a canonical authority (the log stays fully replicated; no copy is "more correct").
+2. **No delivery guarantee from the network.** An event published while everyone else is offline lives only on the sender until it re-serves; if the sender then loses its data first, that event is gone. (The hub's durability mitigates this; phones are less durable.)
+3. **New device = empty** until it backfills from a reachable holder (a signed **snapshot** to avoid replaying all history is planned).
+4. **A self-hosted Waku/nwaku node cannot be a rendezvous** — `createNode` takes only a named preset, no custom bootstrap — so the hub is a KYM peer on the public fleet/topic, not private infrastructure.
+5. **None of the live transport/hub path is verified on real hardware yet.** The convergence *math* and the reconciliation *algorithm* are proven in tests; their *delivery* is not.
 
 ---
 
@@ -200,7 +209,16 @@ Logos **Storage/Codex** encrypted backup of the log is a later, module-side, off
 | **Sync ingest parity (TS ↔ C++)** | **Done — 7/7 checks** (`module/test/sync_ingest.cpp`) |
 | **`delivery_module` transport (desktop)** | **Pending** — wire the C++ ingest path onto `delivery_module` subscribe/send |
 | **`liblogosdelivery` JNI (mobile)** | **Pending** — embed on Android, drive `SyncNode` from RN (bidirectional) |
-| **Merkle-diff backfill** | **Pending** — v1 uses naive `backfill()` re-serve |
+| **Set-reconciliation backfill (algorithm, TS)** | **Done** — `packages/sync/src/reconcile.mjs`, `reconcile.test.mjs` (6 tests, incl. 200-trial property) |
+| **Set-reconciliation (C++ mirror)** | **Done** — `module/src/kym_reconcile_std.hpp`, `reconcile_parity.cpp` (8/8): **byte-identical fingerprints + same diff as TS** (cross-language interop). Wired into the hub (`logFingerprint`). |
+| **Qt-free wire codec** (headless hub / core reconciler) | **Done** — `module/src/kym_wire_std.hpp`, `wire_std_parity.cpp` (34/34) decodes TS JSON + round-trips |
+| **Headless hub ingest path** (open→decode→dedup→fold) | **Done** — `module-hub/` builds headless; `hub_ingest.cpp` (10/10) |
+| **Two-instance convergence** (hub crypto+wire+reconcile+fold) | **Done — over a *simulated* transport** — `hub_sync.cpp` (16/16): two peers with divergent offline edits reconcile, exchange only the diff, converge to identical state + invariant + fixpoint. The Waku hop is stubbed by a byte pipe (real `delivery_module` unverified). |
+| **Headless hub Delivery transport** | **Code-complete, builds** — `module-hub` `onContextReady` → `onMessageReceived`/`createNode`/`subscribe`/`send` (std `LogosMap`/base64), EVENT + SYNC_REQ dispatch, naive re-serve backfill. Not yet run over a live `delivery_module`. |
+| **Delivery payload = base64/JSON** (hub↔desktop interop) | **Aligned + built** — core module gets the std delivery API (JSON payload); the Qt desktop backend now base64s too (`kym_wire_std.hpp::b64encode`), so both surfaces are wire-compatible by construction. Unverified on the wire. |
+| **KYM-SYNC v2 RBSR session over Delivery** | **Pending** — multi-round NEG_OPEN/NEG_MSG state machine on top of the working transport (naive re-serve works today) |
+| **Signed snapshot bootstrap** | **Pending** — cold-start devices load folded state + reconcile only the tail |
+| **Headless hub (core module under `logoscore`)** | **Loads headless — verified locally** — `module-hub/` runs under `logoscore` with `delivery_module` dependency-injected (`run-logoscore.sh`, 2026-07-18). Transport callback + `delivery_module` runtime bring-up still pending. |
 | **Topic rotation (epoch > 0)** | **Pending** — derivation supports it; not yet exercised |
 
 The transport-agnostic core and the cross-language wire/crypto/fold are proven; what remains is

@@ -31,11 +31,12 @@ From a source-verified research pass (86 confirmed claims; YNAB, Copilot, Actual
 - ✅ Three-column envelope grid (Assigned/Activity/Available) + groups + targets + CCP + invariant
 - ✅ Editor: command bar (expense/income/assign/move/target/reconcile/add) wired to SLOTs
 - ✅ Click a category → Assign (a step toward inline)
-- 🟡 **Inline cell editing** — should be "click the Assigned cell and type", not a separate form
-- 🟡 Move money — should be "click the balance → transfer", not typing names
-- 🟡 Forms use **typed names**, not dropdowns/autocomplete
+- ✅ **Inline cell editing** — click the Assigned cell, type, Enter (uses `assignedRaw` for the delta)
+- ✅ **Move money by clicking the balance** — click a category's Available → Move opens pre-filled
+- ✅ Forms use **dropdowns/autocomplete** (`Picker`, editable ComboBox over the live account/category lists)
+- ✅ **Collapsible groups**, **search/filter**, **keyboard shortcuts** (Ctrl+E/I/G/M/T, Ctrl+F filter, Esc close)
 - ❌ **Bulk fill** (copy last month / averages / assign-what's-left / save-by-date UI)
-- ❌ **Collapsible groups**, **search/filter**, **keyboard shortcuts**, density controls
+- ❌ density controls
 - ❌ **Transaction register** (a table of transactions) on desktop
 - ❌ Inspector/detail pane (progressive disclosure)
 - ❌ Reconcile: no cleared-marking / statement flow (just an adjustment)
@@ -55,10 +56,12 @@ From a source-verified research pass (86 confirmed claims; YNAB, Copilot, Actual
 1. **Surface action feedback + errors** — desktop `run()` currently drops backend error strings; show a toast/status line on success *and* failure (Nielsen "visibility of system status"). Mirror on mobile. *Small.*
 2. **Non-color indicators** for money states — add a `−`/⚠ sign or "overspent"/"over-assigned" label next to the color, everywhere (WCAG 1.4.1). *Small.*
 
-**P1 — core interaction wins**
-3. **Inline cell editing** on desktop — click the Assigned cell, type, Enter (uses `assignedRaw` for the delta). The single biggest desktop UX win. *Medium.*
-4. **Dropdowns/autocomplete** for category/account in the command-bar forms; **move money by clicking a balance**. *Medium.*
-5. **Collapsible category groups + search/filter + keyboard nav** on desktop. *Medium.*
+**P1 — core interaction wins** ✅ **shipped**
+3. ✅ **Inline cell editing** on desktop — click the Assigned cell, type, Enter (delta from `assignedRaw`).
+4. ✅ **Dropdowns/autocomplete** (`Picker` editable ComboBox) for category/account in the forms; **move money by clicking a balance** (click Available → Move pre-filled, pointer cursor + tooltip).
+5. ✅ **Collapsible category groups + search/filter + keyboard nav** (Ctrl+E/I/G/M/T open forms, Ctrl+F focuses filter, Esc closes).
+
+*Validated by a standalone render harness (`scripts/qml-harness/`) — mock-backend offscreen render of `Main.qml`, which also refreshes the published screenshots and caught two real bugs qmllint alone missed (`placeholderText` on the Picker; `anchors` inside a `Flow`).*
 
 **P2 — adoption + depth**
 6. **Onboarding** (both surfaces): teach zero-based budgeting empathy-first, warm microcopy, progress, real **empty states**. *Medium-high, high impact.*

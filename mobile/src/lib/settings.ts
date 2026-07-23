@@ -10,10 +10,15 @@ const KEY = "kym.settings.v1";
 
 export interface Settings {
   budgetCurrency: string; // "CZK" | "EUR" | "USD"
+  // Attribution: the human name stamped on events THIS device authors, so a shared
+  // budget shows who added/edited each txn. "" = off. Local preference (like the
+  // currency), NOT a ledger event — mirrors kym_core's author.txt / KYM_AUTHOR.
+  authorName: string;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
   budgetCurrency: DEFAULT_CURRENCY,
+  authorName: "",
 };
 
 export async function loadSettings(): Promise<Settings> {
@@ -26,6 +31,7 @@ export async function loadSettings(): Promise<Settings> {
         typeof parsed?.budgetCurrency === "string"
           ? parsed.budgetCurrency
           : DEFAULT_CURRENCY,
+      authorName: typeof parsed?.authorName === "string" ? parsed.authorName : "",
     };
   } catch {
     return { ...DEFAULT_SETTINGS };

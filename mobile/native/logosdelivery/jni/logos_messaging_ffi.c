@@ -296,6 +296,39 @@ jobject Java_com_receiverandroid_LogosMessagingModule_wakuConnect(JNIEnv *env, j
   return response;
 }
 
+// Node introspection: getNodeInfo("Metrics") returns Prometheus text carrying
+// libp2p_peers / libp2p_gossipsub_peers_per_topic_mesh — the only way to tell a
+// connected node from an isolated one. Mirrors kym_core's refreshPeerCount().
+// Subscribe by CONTENT topic via the high-level API, which auto-shards to the
+// right pubsub topic (/waku/2/rs/<cluster>/<shard>) exactly like the desktop
+// delivery_module does. The low-level waku_relay_subscribe takes a PUBSUB topic;
+// handing it a content topic silently subscribes to a shard that does not exist,
+// so the node receives nothing. That was the sync bug.
+jobject Java_com_receiverandroid_LogosMessagingModule_wakuSubscribeContentTopic(JNIEnv *env,
+                                               jobject thiz,
+                                               jlong wakuPtr,
+                                               jstring contentTopic) {
+  cb_result *result = NULL;
+  const char *ct = (*env)->GetStringUTFChars(env, contentTopic, 0);
+  logosdelivery_subscribe((void *)wakuPtr, on_response, (void *)&result, ct);
+  jobject response = to_jni_result(env, result);
+  free_cb_result(result);
+  (*env)->ReleaseStringUTFChars(env, contentTopic, ct);
+  return response;
+}
+
+jobject Java_com_receiverandroid_LogosMessagingModule_wakuGetNodeInfo(JNIEnv *env, jobject thiz,
+                                               jlong wakuPtr,
+                                               jstring nodeInfoId) {
+  cb_result *result = NULL;
+  const char *id = (*env)->GetStringUTFChars(env, nodeInfoId, 0);
+  logosdelivery_get_node_info((void *)wakuPtr, on_response, (void *)&result, id);
+  jobject response = to_jni_result(env, result);
+  free_cb_result(result);
+  (*env)->ReleaseStringUTFChars(env, nodeInfoId, id);
+  return response;
+}
+
 jobject Java_com_receiverandroid_LogosMessagingModule_wakuListenAddresses(JNIEnv *env,
                                                        jobject thiz,
                                                        jlong wakuPtr) {

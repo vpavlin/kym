@@ -46,11 +46,16 @@ struct CategoryMonth { std::string categoryId, month; Money assigned, activity, 
 struct Target { std::string type, targetMonth; Money amount; };
 struct TargetProgress { std::string type, targetMonth; Money amount, needed, funded; bool onTrack; };
 
+struct Member { std::string id, name, role; bool active = true; };
+
 struct BudgetState {
   std::string currentMonth;
+  bool isGroup = false;
+  std::vector<Member> members;
   std::vector<Account> accounts;
   std::map<std::string, std::string> categoryGroup; // categoryId -> groupId
   std::vector<std::string> categoryIds;
+  std::set<std::string> archivedCategories;         // hidden from the active list; history kept
   std::map<std::string, Money> balances;            // accountId -> balance
   std::vector<CategoryMonth> categoryMonths;
   std::map<std::string, Money> categoryAvailable;   // categoryId -> current available
@@ -80,6 +85,55 @@ inline std::vector<Event> mergeEvents(const std::vector<Event>& events) {
 
 inline std::string keyOf(const std::string& cat, const std::string& month) { return cat + " " + month; }
 
+// Role-based admission for group budgets. Mirrors admitEvents in engine.mjs:
+// until a group.init event appears every event is admitted (personal budget);
+// afterwards member.* need an ADMIN author, budget events need an active
+// admin/editor, and viewers/non-members are dropped. `ordered` must be HLC-sorted.
+struct Admission { std::vector<Event> admitted; std::vector<Member> members; bool isGroup = false; };
+inline Admission admitEvents(const std::vector<Event>& ordered) {
+  Admission out;
+  std::map<std::string, Member> members;      // memberId -> Member
+  std::vector<std::string> order;             // stable insertion order
+  auto get = [&](const std::string& id) -> Member* {
+    auto it = members.find(id); return it == members.end() ? nullptr : &it->second;
+  };
+  for (const auto& e : ordered) {
+    const std::string& author = e.hlc.dev;
+    if (e.type == "group.init") {
+      out.isGroup = true;
+      std::string founder = e.s.count("founderId") ? e.s.at("founderId") : author;
+      if (!members.count(founder)) {
+        members[founder] = Member{founder, e.s.count("founderName") ? e.s.at("founderName") : founder, "admin", true};
+        order.push_back(founder);
+      }
+      out.admitted.push_back(e);
+      continue;
+    }
+    if (!out.isGroup) { out.admitted.push_back(e); continue; }
+    Member* m = get(author);
+    std::string role = (m && m->active) ? m->role : "";
+    if (e.type == "member.add" || e.type == "member.role" || e.type == "member.remove") {
+      if (role != "admin") continue;          // only admins manage members
+      const std::string mid = e.s.count("memberId") ? e.s.at("memberId") : "";
+      if (e.type == "member.add") {
+        if (!mid.empty() && !members.count(mid)) {
+          members[mid] = Member{mid, e.s.count("name") ? e.s.at("name") : mid, e.s.count("role") ? e.s.at("role") : "viewer", true};
+          order.push_back(mid);
+        }
+      } else if (e.type == "member.role") {
+        if (Member* t = get(mid)) t->role = e.s.count("role") ? e.s.at("role") : t->role;
+      } else { // member.remove
+        if (Member* t = get(mid)) t->active = false;
+      }
+      out.admitted.push_back(e);
+    } else if (role == "admin" || role == "editor") {
+      out.admitted.push_back(e);              // active editor+ may change the budget
+    } // viewer / non-member budget events dropped
+  }
+  for (const auto& id : order) out.members.push_back(members[id]);
+  return out;
+}
+
 // The category legs a txn contributes (splits, or single category, or none).
 struct TxnView {
   std::string accountId, date, categoryId, transferId;
@@ -99,8 +153,11 @@ inline std::vector<Split> txnLegs(const TxnView& t) {
 }
 
 inline BudgetState computeState(const std::vector<Event>& rawEvents, std::optional<std::string> asOf = std::nullopt) {
-  auto ordered = mergeEvents(rawEvents);
+  auto admission = admitEvents(mergeEvents(rawEvents));  // role-gated for groups; all-pass for personal
+  auto ordered = admission.admitted;
   BudgetState st;
+  st.isGroup = admission.isGroup;
+  st.members = admission.members;
   st.eventCount = ordered.size();
 
   std::map<std::string, Account> accounts;
@@ -148,7 +205,24 @@ inline BudgetState computeState(const std::vector<Event>& rawEvents, std::option
       assigned[keyOf(e.s.at("fromCategoryId"), m)] -= amt;
       assigned[keyOf(e.s.at("toCategoryId"), m)] += amt;
       months.insert(m);
+    } else if (e.type == "category.delete") {
+      // Remove an (empty) category from the fold. kym_core only emits this for a
+      // category with no assignments and no activity, so there's no orphaned money
+      // to reconcile; drop it and any stray plan entries defensively.
+      const auto& id = e.s.at("categoryId");
+      categories.erase(id);
+      st.categoryGroup.erase(id);
+      categoryOrder.erase(std::remove(categoryOrder.begin(), categoryOrder.end(), id), categoryOrder.end());
+      targets.erase(id);
+      for (auto it = assigned.begin(); it != assigned.end(); )
+        (it->first.rfind(id + " ", 0) == 0) ? it = assigned.erase(it) : ++it;
+    } else if (e.type == "category.archive") {
+      st.archivedCategories.insert(e.s.at("categoryId"));   // stays in the fold; just flagged hidden
+    } else if (e.type == "category.unarchive") {
+      st.archivedCategories.erase(e.s.at("categoryId"));
     }
+    // group.delete has no numeric effect (groups are a display grouping); it's
+    // applied in kym_core's name maps so the empty group stops rendering.
   }
 
   // reconstruct txns (create + edits, sticky delete)
@@ -202,7 +276,11 @@ inline BudgetState computeState(const std::vector<Event>& rawEvents, std::option
     bool onCredit = acct.onBudget && CREDIT_TYPES.count(acct.type);
     for (const auto& leg : legs) {
       if (leg.categoryId == RTA_INFLOW) {
-        income += leg.amount;
+        // Income only counts toward RTA when it lands in an on-budget ASSET
+        // account. Income booked to a credit card / off-budget account has no
+        // backing cash, so counting it inflates RTA and breaks the invariant
+        // (assets never rose). Mirrors packages/engine/src/engine.mjs.
+        if (acct.onBudget && ASSET_TYPES.count(acct.type)) income += leg.amount;
       } else if (isCcp(leg.categoryId)) {
         ccp[leg.categoryId.substr(4)] += leg.amount;
       } else {

@@ -10,13 +10,25 @@ export const EventType = {
   ACCOUNT_EDIT: "account.edit",
   CATEGORY_CREATE: "category.create",
   CATEGORY_EDIT: "category.edit",
+  CATEGORY_DELETE: "category.delete",       // remove an empty category (no assignments/txns)
+  CATEGORY_ARCHIVE: "category.archive",     // hide a category with history (kept, must be emptied first)
+  CATEGORY_UNARCHIVE: "category.unarchive", // restore an archived category
   CATEGORY_TARGET: "category.target",
+  GROUP_DELETE: "group.delete",             // remove an empty group (no categories)
   TXN_CREATE: "txn.create",
   TXN_EDIT: "txn.edit",
   TXN_DELETE: "txn.delete",
   ASSIGN: "assign",
   MOVE: "move",
+  // --- group budgets (opt-in): membership + roles ---
+  GROUP_INIT: "group.init",     // turns a budget into a group; author = founding admin
+  MEMBER_ADD: "member.add",     // admin adds a member with a role
+  MEMBER_ROLE: "member.role",   // admin changes a member's role
+  MEMBER_REMOVE: "member.remove", // admin removes a member (soft; MLS rekey is later)
 };
+
+/** Group roles, most→least privileged. editor+ may change the budget; admin also manages members. */
+export const Role = { ADMIN: "admin", EDITOR: "editor", VIEWER: "viewer" };
 
 export const AccountType = {
   CHECKING: "checking",
@@ -69,6 +81,22 @@ export const ev = {
   categoryEdit: (hlc, { categoryId, groupId, name, hidden }, id) =>
     makeEvent(EventType.CATEGORY_EDIT, hlc, { categoryId, groupId, name, hidden }, id),
 
+  // Remove an EMPTY category (kym_core only emits this when it has no assignments
+  // or transactions, so no money is orphaned). Wire-compatible with the C++ core.
+  categoryDelete: (hlc, { categoryId }, id) =>
+    makeEvent(EventType.CATEGORY_DELETE, hlc, { categoryId }, id),
+
+  // Archive / restore a category WITH history: hidden from the active list but every
+  // transaction/assignment is kept. kym_core requires its Available to be 0 first.
+  categoryArchive: (hlc, { categoryId }, id) =>
+    makeEvent(EventType.CATEGORY_ARCHIVE, hlc, { categoryId }, id),
+  categoryUnarchive: (hlc, { categoryId }, id) =>
+    makeEvent(EventType.CATEGORY_UNARCHIVE, hlc, { categoryId }, id),
+
+  // Remove an EMPTY group (no categories left in it).
+  groupDelete: (hlc, { groupId }, id) =>
+    makeEvent(EventType.GROUP_DELETE, hlc, { groupId }, id),
+
   // A funding target for a category. targetType ∈ 'monthly' (fund `amount` each
   // month) | 'balance' (reach `amount` available) | 'balanceByDate' (reach
   // `amount` available by `targetMonth`). amount=0 clears the target.
@@ -94,4 +122,15 @@ export const ev = {
   // Net-zero move of budgeted money between two category-months.
   move: (hlc, { fromCategoryId, toCategoryId, month, amount }, id) =>
     makeEvent(EventType.MOVE, hlc, { fromCategoryId, toCategoryId, month, amount }, id),
+
+  // --- group budgets. The event's author is hlc.dev (a member id). ---
+  // Turn this budget into a group; the author (or founderId) becomes the founding admin.
+  groupInit: (hlc, { name, founderId, founderName } = {}, id) =>
+    makeEvent(EventType.GROUP_INIT, hlc, { name, founderId, founderName }, id),
+  memberAdd: (hlc, { memberId, name, role }, id) =>
+    makeEvent(EventType.MEMBER_ADD, hlc, { memberId, name, role }, id),
+  memberRole: (hlc, { memberId, role }, id) =>
+    makeEvent(EventType.MEMBER_ROLE, hlc, { memberId, role }, id),
+  memberRemove: (hlc, { memberId }, id) =>
+    makeEvent(EventType.MEMBER_REMOVE, hlc, { memberId }, id),
 };

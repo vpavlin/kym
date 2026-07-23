@@ -34,7 +34,11 @@ function isoToEpoch(iso: string): number {
 }
 
 export function CaptureScreen({ goSetup }: { goSetup: () => void }) {
-  const { state, events, addExpense, budgetCurrency } = useBudget();
+  const { state, events, addExpense, addIncome, budgetCurrency, currentBudgetName, currentBudgetColor } =
+    useBudget();
+  // Expense (money out) or Income (money in → Ready to Assign). Income skips the
+  // category — inflow always lands in the RTA pool.
+  const [mode, setMode] = useState<"expense" | "income">("expense");
   const [cents, setCents] = useState(0); // ATM-style entry: digits shift in from the right
   const [accountId, setAccountId] = useState<string | null>(null);
   const [categoryId, setCategoryId] = useState<string | null>(null);
@@ -148,6 +152,8 @@ export function CaptureScreen({ goSetup }: { goSetup: () => void }) {
     () => formatMoney(amountMilli, activeCurrency),
     [amountMilli, activeCurrency]
   );
+  // The app accent follows the current budget's colour (see makeStyles).
+  const styles = useMemo(() => makeStyles(currentBudgetColor), [currentBudgetColor]);
 
   const press = (k: string) => {
     if (k === "del") setCents((c) => Math.floor(c / 10));
@@ -169,23 +175,25 @@ export function CaptureScreen({ goSetup }: { goSetup: () => void }) {
 
   const save = async () => {
     if (!canSave || !activeAccount) return;
-    await addExpense({
-      amountMilli,
-      accountId: activeAccount,
-      categoryId,
-      cleared: cleared ? "cleared" : "uncleared",
-      // From a scanned receipt: use the receipt's date as the txn date and stash
-      // the merchant as the memo. Both are undefined for a plain manual capture,
-      // so the existing defaults (now / no memo) apply. Category was already
-      // prefilled into `categoryId` and is overridable, so it rides along as-is.
-      // Prefer the scanned merchant; else the manually typed payee. Undefined for
-      // a plain capture (existing "no memo" default applies).
-      memo: receiptMemo ?? (payee.trim() ? payee.trim() : undefined),
-      date: receiptDate ?? undefined,
-    });
+    const memo = receiptMemo ?? (payee.trim() ? payee.trim() : undefined);
     const acctName = accounts.find((a) => a.id === activeAccount)?.name ?? "account";
-    const catName = categories.find((c) => c.id === categoryId)?.name ?? "Uncategorized";
-    setFlash(`Saved ${formatMoney(amountMilli, activeCurrency)} · ${catName} · ${acctName}`);
+    if (mode === "income") {
+      await addIncome(amountMilli, activeAccount, { memo, date: receiptDate ?? undefined });
+      setFlash(`Income ${formatMoney(amountMilli, activeCurrency)} → Ready to Assign · ${acctName}`);
+    } else {
+      await addExpense({
+        amountMilli,
+        accountId: activeAccount,
+        categoryId,
+        cleared: cleared ? "cleared" : "uncleared",
+        // From a scanned receipt: use the receipt's date as the txn date and stash
+        // the merchant as the memo; both undefined for a plain manual capture.
+        memo,
+        date: receiptDate ?? undefined,
+      });
+      const catName = categories.find((c) => c.id === categoryId)?.name ?? "Uncategorized";
+      setFlash(`Saved ${formatMoney(amountMilli, activeCurrency)} · ${catName} · ${acctName}`);
+    }
     setCents(0);
     setCategoryId(null);
     setCleared(false);
@@ -210,11 +218,43 @@ export function CaptureScreen({ goSetup }: { goSetup: () => void }) {
 
   return (
     <View style={styles.root}>
-      {/* Amount — the hero (formatted in the active account's currency). */}
+      {/* Which budget this expense/income lands in — coloured, so you can never
+          book to the wrong household (the #1 multi-budget UX rule). */}
+      <View style={styles.budgetTag}>
+        <View style={[styles.budgetTagDot, { backgroundColor: currentBudgetColor }]} />
+        <Text style={[styles.budgetTagText, { color: currentBudgetColor }]} numberOfLines={1}>
+          {currentBudgetName}
+        </Text>
+      </View>
+
+      {/* Amount — the hero (formatted in the active account's currency). Font size
+          is computed in JS from the string length; `adjustsFontSizeToFit` caused a
+          one-keystroke render lag on Android (digits appeared a tap late). */}
       <View style={styles.amountWrap}>
-        <Text style={styles.amount} numberOfLines={1} adjustsFontSizeToFit>
+        <Text
+          style={[styles.amount, { fontSize: display.length > 13 ? 34 : display.length > 10 ? 44 : display.length > 7 ? 54 : 64 }]}
+          numberOfLines={1}
+        >
           {display}
         </Text>
+      </View>
+
+      {/* Expense (money out) / Income (money in → Ready to Assign). */}
+      <View style={styles.modeRow}>
+        <Pressable
+          style={[styles.modeBtn, mode === "expense" && styles.modeBtnActive]}
+          onPress={() => setMode("expense")}
+          accessibilityState={{ selected: mode === "expense" }}
+        >
+          <Text style={[styles.modeText, mode === "expense" && styles.modeTextActive]}>Expense</Text>
+        </Pressable>
+        <Pressable
+          style={[styles.modeBtn, mode === "income" && styles.modeBtnActive]}
+          onPress={() => setMode("income")}
+          accessibilityState={{ selected: mode === "income" }}
+        >
+          <Text style={[styles.modeText, mode === "income" && styles.modeTextActive]}>Income</Text>
+        </Pressable>
       </View>
 
       {flash ? (
@@ -247,41 +287,48 @@ export function CaptureScreen({ goSetup }: { goSetup: () => void }) {
         )}
       </Pressable>
 
-      {/* Optional payee. Typing one and moving on offers a learned category as
-          the default (pre-selected below — always overridable). */}
+      {/* Note — what the expense was for, or where the income came from. Stored as
+          the transaction memo, and (for an expense) used to suggest a category from
+          your own history. Optional. */}
       <TextInput
         style={styles.payeeInput}
-        placeholder="Payee (optional)"
+        placeholder={mode === "income" ? "Note — where from? (optional)" : "Note — what for? (optional)"}
         placeholderTextColor={theme.textDim}
         value={payee}
         onChangeText={setPayee}
         onEndEditing={suggestFromPayee}
         onBlur={suggestFromPayee}
         returnKeyType="done"
-        autoCapitalize="words"
+        autoCapitalize="sentences"
       />
 
-      {/* Optional context: category (defaults to Uncategorized → Review inbox). */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={styles.chipRow}
-        contentContainerStyle={styles.chipRowContent}
-      >
-        <Chip
-          label="Uncategorized"
-          active={categoryId === null}
-          onPress={() => setCategoryId(null)}
-        />
-        {categories.map((c) => (
+      {/* Category picker — expense only. Income always lands in Ready to Assign. */}
+      {mode === "expense" ? (
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={styles.chipRow}
+          contentContainerStyle={styles.chipRowContent}
+        >
           <Chip
-            key={c.id}
-            label={c.name}
-            active={categoryId === c.id}
-            onPress={() => setCategoryId(c.id)}
+            label="Uncategorized"
+            active={categoryId === null}
+            onPress={() => setCategoryId(null)}
+            accent={currentBudgetColor}
           />
-        ))}
-      </ScrollView>
+          {categories.map((c) => (
+            <Chip
+              key={c.id}
+              label={c.name}
+              active={categoryId === c.id}
+              onPress={() => setCategoryId(c.id)}
+              accent={currentBudgetColor}
+            />
+          ))}
+        </ScrollView>
+      ) : (
+        <Text style={styles.incomeNote}>→ goes to Ready to Assign</Text>
+      )}
 
       {/* Account + cleared row. */}
       <ScrollView
@@ -296,12 +343,14 @@ export function CaptureScreen({ goSetup }: { goSetup: () => void }) {
             label={a.name}
             active={activeAccount === a.id}
             onPress={() => setAccountId(a.id)}
+            accent={currentBudgetColor}
           />
         ))}
         <Chip
           label={cleared ? "Cleared" : "Uncleared"}
           active={cleared}
           onPress={() => setCleared((v) => !v)}
+          accent={currentBudgetColor}
         />
       </ScrollView>
 
@@ -323,7 +372,7 @@ export function CaptureScreen({ goSetup }: { goSetup: () => void }) {
         onPress={save}
         disabled={!canSave}
       >
-        <Text style={styles.saveText}>Save expense</Text>
+        <Text style={styles.saveText}>{mode === "income" ? "Save income" : "Save expense"}</Text>
       </Pressable>
     </View>
   );
@@ -333,23 +382,35 @@ function Chip({
   label,
   active,
   onPress,
+  accent,
 }: {
   label: string;
   active: boolean;
   onPress: () => void;
+  accent: string;
 }) {
   return (
     <Pressable
       onPress={onPress}
-      style={[styles.chip, active && styles.chipActive]}
+      style={[styles.chip, active && { backgroundColor: accent, borderColor: accent }]}
     >
       <Text style={[styles.chipText, active && styles.chipTextActive]}>{label}</Text>
     </Pressable>
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (accent: string) =>
+  StyleSheet.create({
+  modeRow: { flexDirection: "row", alignSelf: "center", backgroundColor: theme.surfaceAlt, borderRadius: 999, padding: 3, marginTop: 4 },
+  modeBtn: { paddingHorizontal: 22, paddingVertical: 7, borderRadius: 999 },
+  modeBtnActive: { backgroundColor: accent },
+  modeText: { color: theme.textDim, fontWeight: "700", fontSize: 14 },
+  modeTextActive: { color: theme.accentText },
+  incomeNote: { color: theme.good, textAlign: "center", marginTop: 12, fontWeight: "600" },
   root: { flex: 1, paddingHorizontal: 16, paddingTop: 8 },
+  budgetTag: { flexDirection: "row", alignItems: "center", gap: 6, alignSelf: "center", marginBottom: 2 },
+  budgetTagDot: { width: 8, height: 8, borderRadius: 4 },
+  budgetTagText: { fontSize: 13, fontWeight: "700" },
   amountWrap: {
     flexDirection: "row",
     alignItems: "center",
@@ -406,7 +467,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: theme.border,
   },
-  chipActive: { backgroundColor: theme.accent, borderColor: theme.accent },
+  chipActive: { backgroundColor: accent, borderColor: accent },
   chipText: { color: theme.textDim, fontWeight: "600" },
   chipTextActive: { color: theme.accentText },
   pad: {
@@ -429,7 +490,7 @@ const styles = StyleSheet.create({
   keyPressed: { backgroundColor: theme.surfaceAlt },
   keyText: { color: theme.text, fontSize: 26, fontWeight: "700" },
   save: {
-    backgroundColor: theme.accent,
+    backgroundColor: accent,
     borderRadius: 14,
     paddingVertical: 18,
     alignItems: "center",
@@ -442,10 +503,14 @@ const styles = StyleSheet.create({
   emptyTitle: { color: theme.text, fontSize: 22, fontWeight: "800", marginBottom: 8 },
   emptyBody: { color: theme.textDim, textAlign: "center", marginBottom: 24, lineHeight: 20 },
   primaryBtn: {
-    backgroundColor: theme.accent,
+    backgroundColor: accent,
     borderRadius: 12,
     paddingVertical: 14,
     paddingHorizontal: 28,
   },
   primaryBtnText: { color: theme.accentText, fontWeight: "800", fontSize: 16 },
 });
+
+// Module-level default (accent = teal) for the module-level Chip sub-component;
+// the main component overrides accent via useMemo(makeStyles).
+const styles = makeStyles(theme.accent);

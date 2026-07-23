@@ -23,6 +23,25 @@
         "type": "github"
       }
     },
+    "kym_core": {
+      "inputs": {
+        "delivery_module": [
+          "delivery_module"
+        ],
+        "logos-module-builder": [
+          "logos-module-builder"
+        ]
+      },
+      "locked": {
+        "path": "../kym_core",
+        "type": "path"
+      },
+      "original": {
+        "path": "../kym_core",
+        "type": "path"
+      },
+      "parent": []
+    },
     "logos-capability-module": {
       "inputs": {
         "logos-module-builder": "logos-module-builder_2"
@@ -8240,6 +8259,7 @@
     "root": {
       "inputs": {
         "delivery_module": "delivery_module",
+        "kym_core": "kym_core",
         "logos-module-builder": "logos-module-builder"
       }
     },

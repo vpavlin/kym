@@ -153,6 +153,40 @@ function add(name, events, extra) {
   ]);
 }
 
+// 7) category.delete removes an empty category (parity with kym_core).
+{
+  const A = device("cdel");
+  add("category.delete drops an empty category", [
+    ev.accountCreate(A.hlc(), { accountId: "chk", name: "Checking", accountType: AccountType.CHECKING, startingBalance: 100000, startDate: dateIn(M) }, A.id()),
+    ev.groupCreate(A.hlc(), { groupId: "g1", name: "Everyday" }, A.id()),
+    ev.categoryCreate(A.hlc(), { categoryId: "groc", groupId: "g1", name: "Groceries" }, A.id()),
+    ev.categoryCreate(A.hlc(), { categoryId: "oops", groupId: "g1", name: "Oops" }, A.id()),
+    ev.categoryDelete(A.hlc(), { categoryId: "oops" }, A.id()),
+  ], ["categories"]);
+}
+
+// 8) category.archive hides but keeps history; unarchive restores.
+{
+  const A = device("carc");
+  add("category.archive keeps history and flags archived", [
+    ev.accountCreate(A.hlc(), { accountId: "chk", name: "Checking", accountType: AccountType.CHECKING, startingBalance: 100000, startDate: dateIn(M) }, A.id()),
+    ev.categoryCreate(A.hlc(), { categoryId: "sub", groupId: "g1", name: "Old subscription" }, A.id()),
+    ev.assign(A.hlc(), { categoryId: "sub", month: M, amount: 5000 }, A.id()),
+    ev.txnCreate(A.hlc(), { txnId: "t1", accountId: "chk", amount: -5000, date: dateIn(M), categoryId: "sub" }, A.id()),
+    ev.categoryArchive(A.hlc(), { categoryId: "sub" }, A.id()),
+  ], ["archivedCategories", "categories"]);
+}
+
+// 9) group.delete removes an empty group.
+{
+  const A = device("gdel");
+  add("group.delete removes an empty group", [
+    ev.groupCreate(A.hlc(), { groupId: "g1", name: "Everyday" }, A.id()),
+    ev.groupCreate(A.hlc(), { groupId: "g2", name: "Stale" }, A.id()),
+    ev.groupDelete(A.hlc(), { groupId: "g2" }, A.id()),
+  ], ["groups"]);
+}
+
 const here = dirname(fileURLToPath(import.meta.url));
 const outDir = join(here, "fixtures");
 mkdirSync(outDir, { recursive: true });

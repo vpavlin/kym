@@ -45,6 +45,20 @@ static Event txn(const std::string& id, const std::string& acc, Money amt, const
   if (!category.empty()) e.s["categoryId"] = category; return e;
 }
 
+// --- group-budget builders (author = hlc.dev) ---
+static Event assignBy(const std::string& dev, const std::string& c, const std::string& m, Money amt) {
+  Event e; e.id = "e" + std::to_string(T); e.type = "assign"; e.hlc = h(dev);
+  e.s["categoryId"] = c; e.s["month"] = m; e.n["amount"] = amt; e.s["mode"] = "delta"; return e;
+}
+static Event groupInit(const std::string& dev, const std::string& name) {
+  Event e; e.id = "e" + std::to_string(T); e.type = "group.init"; e.hlc = h(dev);
+  e.s["name"] = name; e.s["founderId"] = dev; e.s["founderName"] = dev; return e;
+}
+static Event memberAdd(const std::string& admin, const std::string& id, const std::string& role) {
+  Event e; e.id = "e" + std::to_string(T); e.type = "member.add"; e.hlc = h(admin);
+  e.s["memberId"] = id; e.s["name"] = id; e.s["role"] = role; return e;
+}
+
 static const std::string M = "2026-07";
 static std::string d() { return M + "-15T12:00:00Z"; }
 
@@ -136,6 +150,33 @@ int main() {
     ok(sx.balances == sy.balances, "5.converge-balances");
     ok(sx.categoryAvailable == sy.categoryAvailable, "5.converge-available");
     eq(sx.readyToAssign, sy.readyToAssign, "5.converge-rta");
+  }
+
+  // 6. group budgets — role admission mirrors engine.mjs group tests
+  {
+    // editor counts, viewer & non-member dropped; order-independent
+    std::vector<Event> ev = {
+      groupInit("A", "Household"),           // founder A (also authors cat() below) is admin
+      memberAdd("A", "bob", "editor"),
+      memberAdd("A", "carol", "viewer"),
+      cat("groc", "Groceries"),              // authored by "A" (admin) → admitted
+      assignBy("bob", "groc", M, 30000),     // editor → counts
+      assignBy("carol", "groc", M, 9999),    // viewer → ignored
+      assignBy("eve", "groc", M, 5000),      // non-member → ignored
+    };
+    auto s = computeState(ev);
+    ok(s.isGroup, "6.isGroup");
+    eq(s.categoryAvailable["groc"], 30000, "6.editor-counts-viewer-dropped");
+    ok(s.members.size() == 3, "6.member-count");
+    // order independence
+    std::vector<Event> rev(ev.rbegin(), ev.rend());
+    auto s2 = computeState(rev);
+    eq(s2.categoryAvailable["groc"], 30000, "6.converge");
+    // an editor cannot add members
+    std::vector<Event> ev2 = ev;
+    ev2.push_back(memberAdd("bob", "mallory", "editor")); // bob is editor, not admin → dropped
+    auto s3 = computeState(ev2);
+    ok(s3.members.size() == 3, "6.editor-cannot-add-member");
   }
 
   std::cout << (failures ? "PARITY FAILED" : "PARITY OK") << " — " << (checks - failures) << "/" << checks << " checks passed\n";

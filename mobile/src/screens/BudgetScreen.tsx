@@ -2,11 +2,27 @@
 // Everything here is read from computeState(log): Ready to Assign, per-category
 // Available for the current month, account balances, and the invariant oracle.
 // No number on this screen is stored; all are a fold of the local event log.
-import React from "react";
-import { ScrollView, StyleSheet, Text, View } from "react-native";
+import React, { useMemo, useState } from "react";
+import {
+  Alert,
+  Modal,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
 import { useBudget } from "../state/BudgetContext";
-import { formatMoney } from "../lib/engine";
+import { formatMoney, toMilli, netWorth } from "../lib/engine";
 import { theme } from "../ui/theme";
+
+// What the action sheet is currently editing: an envelope (assign / set target)
+// or an account (reconcile). Null = closed.
+type Sheet =
+  | { kind: "category"; id: string; name: string }
+  | { kind: "account"; id: string; name: string; currency: string }
+  | null;
 
 function Amount({
   milli,
@@ -38,8 +54,33 @@ function Amount({
 }
 
 export function BudgetScreen() {
-  const { state, invariant, budgetCurrency } = useBudget();
+  const { state, invariant, budgetCurrency, assign, setTarget, reconcile, moveMoney, currentBudgetColor } = useBudget();
+  // Accent follows the current budget's colour. The module-level `styles` (default
+  // accent) still serves the <Amount> sub-component, which uses no accent.
+  const styles = useMemo(() => makeStyles(currentBudgetColor), [currentBudgetColor]);
   const month = state.currentMonth ?? "—";
+
+  // Action sheet: tap an envelope to assign / set a target, tap an account to
+  // reconcile. All ops go through the shared engine (BudgetContext) — same events
+  // the desktop and CLI produce.
+  const [sheet, setSheet] = useState<Sheet>(null);
+  const [amount, setAmount] = useState("");
+  const [busy, setBusy] = useState(false);
+  const closeSheet = () => { setSheet(null); setAmount(""); };
+
+  const parse = (): number | null => {
+    const t = amount.trim();
+    if (!t) return null;
+    try { return toMilli(t); } catch { return null; }
+  };
+  const run = async (fn: () => Promise<unknown>, okMsg: string) => {
+    const m = parse();
+    if (m === null) { Alert.alert("Enter an amount", "Type a number like 1500 or 1500.00."); return; }
+    setBusy(true);
+    try { await fn(); closeSheet(); }
+    catch (e: any) { Alert.alert("Couldn't save", String(e?.message ?? e)); }
+    finally { setBusy(false); }
+  };
 
   const cmByCat = new Map<string, { assigned: number; activity: number }>();
   for (const cm of state.categoryMonths) {
@@ -60,7 +101,7 @@ export function BudgetScreen() {
       <View
         style={[
           styles.rta,
-          { borderColor: state.readyToAssign < 0 ? theme.danger : theme.accent },
+          { borderColor: state.readyToAssign < 0 ? theme.danger : currentBudgetColor },
         ]}
       >
         <Text style={styles.rtaLabel}>Ready to Assign · {month}</Text>
@@ -107,7 +148,12 @@ export function BudgetScreen() {
       <Text style={styles.section}>Accounts</Text>
       <View style={styles.card}>
         {state.accounts.map((a) => (
-          <View key={a.id} style={styles.row}>
+          <Pressable
+            key={a.id}
+            style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
+            onPress={() => setSheet({ kind: "account", id: a.id, name: a.name, currency: a.currency || budgetCurrency })}
+            accessibilityHint="Reconcile this account"
+          >
             <Text style={styles.rowName}>
               {a.name}{" "}
               <Text style={styles.rowType}>
@@ -119,11 +165,24 @@ export function BudgetScreen() {
               milli={state.balances[a.id] ?? 0}
               currency={a.currency || budgetCurrency}
             />
-          </View>
+          </Pressable>
         ))}
         {state.accounts.length === 0 ? (
           <Text style={styles.emptyLine}>No accounts. Seed a budget on the Setup tab.</Text>
         ) : null}
+        {state.accounts.length > 0
+          ? (() => {
+              const nw = netWorth(state, budgetCurrency);
+              return nw.currencies.map((ccy) => (
+                <View key={ccy} style={styles.netRow}>
+                  <Text style={styles.netLabel}>
+                    Net worth{nw.currencies.length > 1 ? ` (${ccy})` : ""}
+                  </Text>
+                  <Text style={styles.netValue}>{formatMoney(nw.byCurrency[ccy].net, ccy)}</Text>
+                </View>
+              ));
+            })()
+          : null}
       </View>
 
       {/* Envelopes by group. */}
@@ -137,7 +196,12 @@ export function BudgetScreen() {
                 const avail = state.categoryAvailable[c.id] ?? 0;
                 const cm = cmByCat.get(c.id) ?? { assigned: 0, activity: 0 };
                 return (
-                  <View key={c.id} style={styles.catRow}>
+                  <Pressable
+                    key={c.id}
+                    style={({ pressed }) => [styles.catRow, pressed && styles.rowPressed]}
+                    onPress={() => setSheet({ kind: "category", id: c.id, name: c.name })}
+                    accessibilityHint="Assign money or set a target"
+                  >
                     <View style={{ flex: 1 }}>
                       <Text style={styles.rowName}>{c.name}</Text>
                       <Text style={styles.catMeta}>
@@ -148,7 +212,7 @@ export function BudgetScreen() {
                     <View style={styles.availPill}>
                       <Amount milli={avail} currency={budgetCurrency} warnNegative />
                     </View>
-                  </View>
+                  </Pressable>
                 );
               })}
           </View>
@@ -177,11 +241,116 @@ export function BudgetScreen() {
         {formatMoney(state.income, budgetCurrency)} · assigned{" "}
         {formatMoney(state.totalAssigned, budgetCurrency)}
       </Text>
+
+      {/* Action sheet — assign / set target on a category, reconcile an account. */}
+      <Modal visible={sheet !== null} transparent animationType="fade" onRequestClose={closeSheet}>
+        <Pressable style={styles.backdrop} onPress={closeSheet}>
+          <Pressable style={styles.sheet} onPress={() => {}}>
+            <Text style={styles.sheetTitle}>
+              {sheet?.kind === "account" ? `Reconcile ${sheet.name}` : `${sheet?.name}`}
+            </Text>
+            <Text style={styles.sheetSub}>
+              {sheet?.kind === "account"
+                ? "Enter the balance your bank shows. KYM books the difference and locks this account's transactions."
+                : "Give this envelope money, or set a monthly funding target."}
+            </Text>
+            <TextInput
+              style={styles.sheetInput}
+              value={amount}
+              onChangeText={setAmount}
+              keyboardType="decimal-pad"
+              placeholder={sheet?.kind === "account" ? "actual balance" : "amount"}
+              placeholderTextColor={theme.textDim}
+              autoFocus
+            />
+            <View style={styles.sheetBtns}>
+              {sheet?.kind === "account" ? (
+                <Pressable
+                  style={[styles.sheetBtn, styles.sheetBtnPrimary]}
+                  disabled={busy}
+                  onPress={() =>
+                    run(async () => {
+                      const diff = await reconcile(sheet.id, parse()!);
+                      Alert.alert("Reconciled", diff === 0 ? "Already matched — transactions locked." : `Booked ${formatMoney(diff, sheet.currency)} adjustment.`);
+                    }, "Reconciled")
+                  }
+                >
+                  <Text style={styles.sheetBtnText}>Reconcile</Text>
+                </Pressable>
+              ) : (
+                <>
+                  <Pressable
+                    style={[styles.sheetBtn, styles.sheetBtnPrimary]}
+                    disabled={busy}
+                    onPress={() => run(() => assign(sheet!.id, parse()!, "delta"), "Assigned")}
+                  >
+                    <Text style={styles.sheetBtnText}>Assign +</Text>
+                  </Pressable>
+                  <Pressable
+                    style={[styles.sheetBtn, styles.sheetBtnGhost]}
+                    disabled={busy}
+                    onPress={() => run(() => setTarget(sheet!.id, "monthly", parse()!), "Target set")}
+                  >
+                    <Text style={styles.sheetBtnGhostText}>Set /mo target</Text>
+                  </Pressable>
+                </>
+              )}
+            </View>
+
+            {/* Move the amount from this envelope to another one (net-zero). */}
+            {sheet?.kind === "category" ? (
+              <View style={styles.moveWrap}>
+                <Text style={styles.moveLabel}>or move the amount to →</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.moveChips}>
+                  {state.categories
+                    .filter((c) => c.id !== sheet.id && !c.hidden)
+                    .map((c) => (
+                      <Pressable
+                        key={c.id}
+                        style={styles.moveChip}
+                        disabled={busy}
+                        onPress={() => run(() => moveMoney(sheet.id, c.id, parse()!), `Moved to ${c.name}`)}
+                      >
+                        <Text style={styles.moveChipText}>{c.name}</Text>
+                      </Pressable>
+                    ))}
+                </ScrollView>
+              </View>
+            ) : null}
+            <Pressable onPress={closeSheet} style={styles.sheetCancel}>
+              <Text style={styles.sheetCancelText}>Cancel</Text>
+            </Pressable>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </ScrollView>
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (accent: string) =>
+  StyleSheet.create({
+  rowPressed: { opacity: 0.55 },
+  netRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", borderTopWidth: 1, borderTopColor: theme.border, marginTop: 4, paddingTop: 10 },
+  netLabel: { color: theme.textDim, fontWeight: "700", fontSize: 13 },
+  netValue: { color: theme.text, fontWeight: "800", fontSize: 15 },
+  backdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.55)", justifyContent: "flex-end" },
+  sheet: { backgroundColor: theme.surface, borderTopLeftRadius: 18, borderTopRightRadius: 18, padding: 20, paddingBottom: 34, borderTopWidth: 1, borderColor: theme.border },
+  sheetTitle: { color: theme.text, fontSize: 19, fontWeight: "800" },
+  sheetSub: { color: theme.textDim, fontSize: 13, lineHeight: 19, marginTop: 6 },
+  sheetInput: { backgroundColor: theme.surfaceAlt, borderRadius: 10, borderWidth: 1, borderColor: theme.border, color: theme.text, fontSize: 20, paddingHorizontal: 14, paddingVertical: 12, marginTop: 16 },
+  sheetBtns: { flexDirection: "row", gap: 10, marginTop: 14 },
+  sheetBtn: { flex: 1, borderRadius: 10, paddingVertical: 13, alignItems: "center" },
+  sheetBtnPrimary: { backgroundColor: accent },
+  sheetBtnText: { color: theme.accentText, fontWeight: "800", fontSize: 15 },
+  sheetBtnGhost: { backgroundColor: theme.surfaceAlt, borderWidth: 1, borderColor: theme.border },
+  sheetBtnGhostText: { color: theme.text, fontWeight: "700", fontSize: 15 },
+  sheetCancel: { alignItems: "center", paddingVertical: 14, marginTop: 4 },
+  sheetCancelText: { color: theme.textDim, fontWeight: "600" },
+  moveWrap: { marginTop: 16 },
+  moveLabel: { color: theme.textDim, fontSize: 12, marginBottom: 8 },
+  moveChips: { gap: 8, paddingRight: 8 },
+  moveChip: { backgroundColor: theme.surfaceAlt, borderWidth: 1, borderColor: theme.border, borderRadius: 999, paddingHorizontal: 14, paddingVertical: 9 },
+  moveChipText: { color: theme.text, fontSize: 13, fontWeight: "600" },
   root: { flex: 1, paddingHorizontal: 16 },
   amt: { fontSize: 18, fontWeight: "800" },
   amtWrap: { flexDirection: "row", alignItems: "center", gap: 6 },
@@ -248,3 +417,7 @@ const styles = StyleSheet.create({
   emptyLine: { color: theme.textDim, paddingVertical: 14 },
   footer: { color: theme.textDim, fontSize: 12, textAlign: "center", marginTop: 24 },
 });
+
+// Module-level default (accent = teal) for the <Amount> sub-component and any
+// non-hook reference; the main component overrides accent via useMemo(makeStyles).
+const styles = makeStyles(theme.accent);

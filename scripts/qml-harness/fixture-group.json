@@ -1,0 +1,155 @@
+{
+  "currency": "CZK",
+  "currentMonth": "2026-07",
+  "readyToAssign": "3 500 K\u010d",
+  "readyToAssignRaw": 3500000,
+  "isGroup": true,
+  "members": [
+    {
+      "id": "alice",
+      "name": "Alice",
+      "role": "admin",
+      "active": true,
+      "you": true
+    },
+    {
+      "id": "bob",
+      "name": "Bob",
+      "role": "editor",
+      "active": true,
+      "you": false
+    },
+    {
+      "id": "carol",
+      "name": "Carol",
+      "role": "viewer",
+      "active": true,
+      "you": false
+    }
+  ],
+  "invariant": {
+    "ok": true,
+    "assets": "48 500 K\u010d",
+    "categoriesAvail": "45 000 K\u010d",
+    "diff": "0 K\u010d"
+  },
+  "accounts": [
+    {
+      "id": "chk",
+      "name": "Checking",
+      "type": "checking",
+      "onBudget": true,
+      "balance": "45 000 K\u010d"
+    },
+    {
+      "id": "visa",
+      "name": "Visa",
+      "type": "creditCard",
+      "onBudget": true,
+      "balance": "-3 500 K\u010d"
+    },
+    {
+      "id": "rev",
+      "name": "Revolut",
+      "type": "tracking",
+      "onBudget": false,
+      "balance": "420,00 \u20ac"
+    }
+  ],
+  "groups": [
+    {
+      "id": "g:bills",
+      "name": "Bills",
+      "categories": [
+        {
+          "id": "rent",
+          "name": "Rent",
+          "assigned": "18 000 K\u010d",
+          "assignedRaw": 18000000,
+          "activity": "-18 000 K\u010d",
+          "available": "0 K\u010d",
+          "negative": false,
+          "target": "\ud83c\udfaf funded",
+          "targetOnTrack": true
+        },
+        {
+          "id": "util",
+          "name": "Utilities",
+          "assigned": "3 000 K\u010d",
+          "assignedRaw": 3000000,
+          "activity": "-2 450 K\u010d",
+          "available": "550 K\u010d",
+          "negative": false,
+          "target": "",
+          "targetOnTrack": false
+        }
+      ]
+    },
+    {
+      "id": "g:every",
+      "name": "Everyday",
+      "categories": [
+        {
+          "id": "groc",
+          "name": "Groceries",
+          "assigned": "8 000 K\u010d",
+          "assignedRaw": 8000000,
+          "activity": "-6 240 K\u010d",
+          "available": "1 760 K\u010d",
+          "negative": false,
+          "target": "\ud83c\udfaf need 500 K\u010d",
+          "targetOnTrack": false
+        },
+        {
+          "id": "dine",
+          "name": "Dining",
+          "assigned": "3 000 K\u010d",
+          "assignedRaw": 3000000,
+          "activity": "-3 680 K\u010d",
+          "available": "-680 K\u010d",
+          "negative": true,
+          "target": "",
+          "targetOnTrack": false
+        },
+        {
+          "id": "fun",
+          "name": "Fun Money",
+          "assigned": "2 000 K\u010d",
+          "assignedRaw": 2000000,
+          "activity": "0 K\u010d",
+          "available": "2 000 K\u010d",
+          "negative": false,
+          "target": "",
+          "targetOnTrack": false
+        }
+      ]
+    },
+    {
+      "id": "g:goals",
+      "name": "Goals",
+      "categories": [
+        {
+          "id": "efund",
+          "name": "Emergency Fund",
+          "assigned": "5 000 K\u010d",
+          "assignedRaw": 5000000,
+          "activity": "0 K\u010d",
+          "available": "40 000 K\u010d",
+          "negative": false,
+          "target": "\ud83c\udfaf need 10 000 K\u010d",
+          "targetOnTrack": false
+        }
+      ]
+    }
+  ],
+  "creditCardPayments": [
+    {
+      "account": "visa",
+      "name": "Visa",
+      "available": "3 500 K\u010d"
+    }
+  ],
+  "fingerprint": "amber oxide cobra",
+  "pairingCode": "000G40R40M30E209185GR38E1W8124GK2GAHC5RR34D1P70X3RFG",
+  "paired": false
+}

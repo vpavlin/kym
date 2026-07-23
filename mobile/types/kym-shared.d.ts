@@ -115,6 +115,20 @@ declare module "@kym/contract" {
       p: { categoryId: string; groupId?: string; name?: string; hidden?: boolean },
       id?: string
     ): KymEvent;
+    categoryDelete(hlc: HLC, p: { categoryId: string }, id?: string): KymEvent;
+    categoryArchive(hlc: HLC, p: { categoryId: string }, id?: string): KymEvent;
+    categoryUnarchive(hlc: HLC, p: { categoryId: string }, id?: string): KymEvent;
+    groupDelete(hlc: HLC, p: { groupId: string }, id?: string): KymEvent;
+    categoryTarget(
+      hlc: HLC,
+      p: {
+        categoryId: string;
+        targetType: "monthly" | "balance" | "balanceByDate";
+        amount: Money;
+        targetMonth?: string | null;
+      },
+      id?: string
+    ): KymEvent;
     txnCreate(
       hlc: HLC,
       p: {
@@ -149,7 +163,22 @@ declare module "@kym/contract" {
       },
       id?: string
     ): KymEvent;
+    groupInit(
+      hlc: HLC,
+      p?: { name?: string; founderId?: string; founderName?: string },
+      id?: string
+    ): KymEvent;
+    memberAdd(
+      hlc: HLC,
+      p: { memberId: string; name?: string; role: string },
+      id?: string
+    ): KymEvent;
+    memberRole(hlc: HLC, p: { memberId: string; role: string }, id?: string): KymEvent;
+    memberRemove(hlc: HLC, p: { memberId: string }, id?: string): KymEvent;
   };
+
+  /** Group roles, most→least privileged. */
+  export const Role: { ADMIN: "admin"; EDITOR: "editor"; VIEWER: "viewer" };
 }
 
 declare module "@kym/contract/money" {
@@ -191,6 +220,7 @@ declare module "@kym/engine" {
     groupId: string;
     name: string;
     hidden: boolean;
+    archived?: boolean;
   }
   export interface CategoryMonth {
     categoryId: string;
@@ -199,11 +229,20 @@ declare module "@kym/engine" {
     activity: Money;
     available: Money;
   }
+  export interface Member {
+    id: string;
+    name: string;
+    role: string;
+    active: boolean;
+  }
   export interface BudgetState {
     currentMonth: string | null;
+    isGroup: boolean;
+    members: Member[];
     accounts: AccountView[];
     groups: GroupView[];
     categories: CategoryView[];
+    archivedCategories: string[];
     balances: Record<string, Money>;
     categoryMonths: CategoryMonth[];
     categoryAvailable: Record<string, Money>;
@@ -245,6 +284,27 @@ declare module "@kym/engine" {
     events: KymEvent[],
     hint?: { payee?: string; memo?: string }
   ): CategorySuggestion | null;
+
+  export interface NetWorthRow {
+    id: string;
+    name: string;
+    type: string;
+    balance: Money;
+    onBudget: boolean;
+  }
+  export interface NetWorth {
+    currencies: string[];
+    byCurrency: Record<string, { net: Money; rows: NetWorthRow[] }>;
+  }
+  export function netWorth(state: BudgetState, budgetCurrency?: string): NetWorth;
+
+  export interface SpendingReport {
+    month: string;
+    rows: { categoryId: string; name: string; spent: Money }[];
+    total: Money;
+  }
+  export function spendingReport(state: BudgetState, month: string): SpendingReport;
+
   export const AccountType: Record<string, string>;
 }
 

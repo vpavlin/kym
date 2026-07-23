@@ -43,6 +43,10 @@ Event = { v:1, id:UUID, type:EventType, hlc:HLC, dev:DeviceId, payload:{…} }
 | `txn.delete`     | `{txnId}` | tombstone: the txn no longer contributes |
 | `assign`         | `{categoryId, month, mode:'set'\|'delta', amount}` | set/adjust the budgeted number for a category-month (§4) |
 | `move`           | `{fromCategoryId, toCategoryId, month, amount}` | net-zero transfer between two category-months (§4) |
+| `group.init`     | `{name, founderId?, founderName?}` | **opt-in**: turns this budget into a group; the author (or `founderId`) becomes the founding admin (§10) |
+| `member.add`     | `{memberId, name, role}` | admin adds a member; `role ∈ admin\|editor\|viewer` (§10) |
+| `member.role`    | `{memberId, role}` | admin changes a member's role (§10) |
+| `member.remove`  | `{memberId}` | admin removes a member; their later events are ignored on merge (§10) |
 
 System categories are created implicitly, not by `category.create`:
 - **`rta-inflow`** — the "Inflow: Ready to Assign" pseudo-category. A txn categorized here is income into the global pool.
@@ -179,3 +183,27 @@ Neither has seen the other. Then they sync (union of all 6 events) and both fold
 - Invariant: accounts 45000 == available (25000 + 20000 = 45000) + RTA (0) = 45000. ✓
 
 Both devices reach exactly this. **No edit was lost; the two concurrent assigns and the move all survived and combined** — the property Perun's LWW cannot provide.
+
+---
+
+## 10. Group budgets & roles (opt-in)
+
+A budget is **personal by default** — every event in the log is folded, exactly as above. A `group.init` event turns it into a **group budget**: from that point the fold admits an event only if its author is allowed to make it. This is issue #12, phase 1 (membership + roles enforced on merge); MLS key rotation / revocation and expense-splitting are later phases.
+
+**Author of an event = `hlc.dev`** — the member's device id. In a group each participant pairs with a stable device id that *is* their member id. (Phase 1 trusts the author claim inside the shared household key; phase 3 adds per-member signatures so a member can't forge another's author.)
+
+**Roles** (`admin > editor > viewer`):
+- **admin** — everything, including managing members (`member.*`).
+- **editor** — may change the budget (accounts, categories, transactions, assign, move, targets) but not membership.
+- **viewer** — read-only; their budget-mutating events are dropped.
+
+**Admission** (`admitEvents`, mirrored in `kym_engine.hpp`), applied in HLC order before the ledger/plan fold:
+1. No `group.init` seen yet ⇒ admit everything (personal budget — fully backward compatible).
+2. `group.init` ⇒ the founder becomes an active **admin**; the budget is now a group.
+3. `member.*` events are admitted only if their author is an **active admin**; they update the membership projection.
+4. Any other (budget-mutating) event is admitted only if its author is an **active admin or editor**.
+5. Viewers and non-members are **ignored, not counted** — the only enforcement possible in an append-only p2p log ("enforcement on merge"). A rejected member is removed *and*, in phase 3, the group is re-keyed (MLS) so they can no longer read.
+
+Admission is itself a deterministic fold of the same event set, so it is **order-independent**: every device that holds the same events computes the same membership and therefore admits the same budget events → convergence still holds. A promotion/demotion takes effect for events that sort after it in HLC order.
+
+`computeState` exposes `isGroup` and `members:[{id,name,role,active}]` alongside the budget numbers; personal budgets report `isGroup:false, members:[]`.

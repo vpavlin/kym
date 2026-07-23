@@ -714,5 +714,283 @@
       "readyToAssign": 500000,
       "invariantOk": true
     }
+  },
+  {
+    "name": "category.delete drops an empty category",
+    "events": [
+      {
+        "v": 1,
+        "id": "cdel-e0",
+        "type": "account.create",
+        "hlc": {
+          "wall": 1000000,
+          "ctr": 0,
+          "dev": "cdel"
+        },
+        "dev": "cdel",
+        "payload": {
+          "accountId": "chk",
+          "name": "Checking",
+          "accountType": "checking",
+          "onBudget": true,
+          "startingBalance": 100000,
+          "startDate": "2026-07-15T12:00:00Z"
+        }
+      },
+      {
+        "v": 1,
+        "id": "cdel-e1",
+        "type": "group.create",
+        "hlc": {
+          "wall": 1000001,
+          "ctr": 0,
+          "dev": "cdel"
+        },
+        "dev": "cdel",
+        "payload": {
+          "groupId": "g1",
+          "name": "Everyday"
+        }
+      },
+      {
+        "v": 1,
+        "id": "cdel-e2",
+        "type": "category.create",
+        "hlc": {
+          "wall": 1000002,
+          "ctr": 0,
+          "dev": "cdel"
+        },
+        "dev": "cdel",
+        "payload": {
+          "categoryId": "groc",
+          "groupId": "g1",
+          "name": "Groceries"
+        }
+      },
+      {
+        "v": 1,
+        "id": "cdel-e3",
+        "type": "category.create",
+        "hlc": {
+          "wall": 1000003,
+          "ctr": 0,
+          "dev": "cdel"
+        },
+        "dev": "cdel",
+        "payload": {
+          "categoryId": "oops",
+          "groupId": "g1",
+          "name": "Oops"
+        }
+      },
+      {
+        "v": 1,
+        "id": "cdel-e4",
+        "type": "category.delete",
+        "hlc": {
+          "wall": 1000004,
+          "ctr": 0,
+          "dev": "cdel"
+        },
+        "dev": "cdel",
+        "payload": {
+          "categoryId": "oops"
+        }
+      }
+    ],
+    "expect": {
+      "balances": {
+        "chk": 100000
+      },
+      "categoryAvailable": {
+        "groc": 0
+      },
+      "readyToAssign": 100000,
+      "invariantOk": true,
+      "categories": [
+        {
+          "id": "groc",
+          "groupId": "g1",
+          "name": "Groceries",
+          "hidden": false,
+          "archived": false
+        }
+      ]
+    }
+  },
+  {
+    "name": "category.archive keeps history and flags archived",
+    "events": [
+      {
+        "v": 1,
+        "id": "carc-e0",
+        "type": "account.create",
+        "hlc": {
+          "wall": 1000000,
+          "ctr": 0,
+          "dev": "carc"
+        },
+        "dev": "carc",
+        "payload": {
+          "accountId": "chk",
+          "name": "Checking",
+          "accountType": "checking",
+          "onBudget": true,
+          "startingBalance": 100000,
+          "startDate": "2026-07-15T12:00:00Z"
+        }
+      },
+      {
+        "v": 1,
+        "id": "carc-e1",
+        "type": "category.create",
+        "hlc": {
+          "wall": 1000001,
+          "ctr": 0,
+          "dev": "carc"
+        },
+        "dev": "carc",
+        "payload": {
+          "categoryId": "sub",
+          "groupId": "g1",
+          "name": "Old subscription"
+        }
+      },
+      {
+        "v": 1,
+        "id": "carc-e2",
+        "type": "assign",
+        "hlc": {
+          "wall": 1000002,
+          "ctr": 0,
+          "dev": "carc"
+        },
+        "dev": "carc",
+        "payload": {
+          "categoryId": "sub",
+          "month": "2026-07",
+          "amount": 5000,
+          "mode": "delta"
+        }
+      },
+      {
+        "v": 1,
+        "id": "carc-e3",
+        "type": "txn.create",
+        "hlc": {
+          "wall": 1000003,
+          "ctr": 0,
+          "dev": "carc"
+        },
+        "dev": "carc",
+        "payload": {
+          "txnId": "t1",
+          "accountId": "chk",
+          "amount": -5000,
+          "date": "2026-07-15T12:00:00Z",
+          "categoryId": "sub",
+          "cleared": "uncleared",
+          "approved": true
+        }
+      },
+      {
+        "v": 1,
+        "id": "carc-e4",
+        "type": "category.archive",
+        "hlc": {
+          "wall": 1000004,
+          "ctr": 0,
+          "dev": "carc"
+        },
+        "dev": "carc",
+        "payload": {
+          "categoryId": "sub"
+        }
+      }
+    ],
+    "expect": {
+      "balances": {
+        "chk": 95000
+      },
+      "categoryAvailable": {
+        "sub": 0
+      },
+      "readyToAssign": 95000,
+      "invariantOk": true,
+      "archivedCategories": [
+        "sub"
+      ],
+      "categories": [
+        {
+          "id": "sub",
+          "groupId": "g1",
+          "name": "Old subscription",
+          "hidden": false,
+          "archived": true
+        }
+      ]
+    }
+  },
+  {
+    "name": "group.delete removes an empty group",
+    "events": [
+      {
+        "v": 1,
+        "id": "gdel-e0",
+        "type": "group.create",
+        "hlc": {
+          "wall": 1000000,
+          "ctr": 0,
+          "dev": "gdel"
+        },
+        "dev": "gdel",
+        "payload": {
+          "groupId": "g1",
+          "name": "Everyday"
+        }
+      },
+      {
+        "v": 1,
+        "id": "gdel-e1",
+        "type": "group.create",
+        "hlc": {
+          "wall": 1000001,
+          "ctr": 0,
+          "dev": "gdel"
+        },
+        "dev": "gdel",
+        "payload": {
+          "groupId": "g2",
+          "name": "Stale"
+        }
+      },
+      {
+        "v": 1,
+        "id": "gdel-e2",
+        "type": "group.delete",
+        "hlc": {
+          "wall": 1000002,
+          "ctr": 0,
+          "dev": "gdel"
+        },
+        "dev": "gdel",
+        "payload": {
+          "groupId": "g2"
+        }
+      }
+    ],
+    "expect": {
+      "balances": {},
+      "categoryAvailable": {},
+      "readyToAssign": 0,
+      "invariantOk": true,
+      "groups": [
+        {
+          "id": "g1",
+          "name": "Everyday"
+        }
+      ]
+    }
   }
 ]

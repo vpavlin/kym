@@ -39,7 +39,7 @@ KYM is a local-first, p2p, zero-based envelope budget on the Logos stack. Two ap
 
 ## Trust & crypto
 
-One budget = one **household PSK** (32 bytes), shared device-to-device by QR + pgp_words fingerprint (ported from Perun's working pairing). Channel encryption is ChaCha20-Poly1305 with a topic derived from the PSK, so neither content nor topic leaks. Every device in the household is a full read/write peer. Cross-household sharing (splitting a bill with friends) would need group crypto (MLS) and is out of v1 scope.
+One budget = one **household PSK** (32 bytes), shared device-to-device by QR + pgp_words fingerprint (ported from Perun's working pairing). Channel encryption is ChaCha20-Poly1305 with a topic derived from the PSK, so neither the message content nor the topic *value* is exposed (transport metadata — timing/traffic — is a separate, unsolved layer, future work via Nym). Every device in the household is a full read/write peer. Cross-household sharing (splitting a bill with friends) would need group crypto (MLS) and is out of v1 scope.
 
 ## Platform targets (match Perun)
 

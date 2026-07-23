@@ -21,9 +21,16 @@ install -m644 /tmp/kym-lgx-out/*.lgx "$LAN_DIR/"
 # self-signed cert for this host (Basecamp requires https)
 CERT="$LAN_DIR/lan-cert.pem" KEY="$LAN_DIR/lan-key.pem"
 if [ ! -f "$LAN_DIR/lan-cert.pem" ]; then
+  # NB: must be a LEAF/server cert, not a CA cert. `openssl req -x509` defaults to
+  # basicConstraints=CA:TRUE on OpenSSL 3, and Basecamp/Qt rejects a CA cert used
+  # to terminate TLS ("fetch failed"). Force CA:FALSE + serverAuth (like Perun's).
   openssl req -x509 -newkey rsa:2048 -nodes -days 825 \
     -keyout "$LAN_DIR/lan-key.pem" -out "$LAN_DIR/lan-cert.pem" \
-    -subj "/CN=${HOST}" -addext "subjectAltName=IP:${HOST}" 2>/dev/null
+    -subj "/O=vpavlin LAN/CN=${HOST}" \
+    -addext "subjectAltName=IP:${HOST},DNS:localhost,IP:127.0.0.1" \
+    -addext "basicConstraints=critical,CA:FALSE" \
+    -addext "keyUsage=critical,digitalSignature,keyEncipherment" \
+    -addext "extendedKeyUsage=serverAuth" 2>/dev/null
   echo "generated self-signed cert for ${HOST}" >&2
 fi
 

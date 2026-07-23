@@ -4,6 +4,27 @@
 import { ev, monthOf } from "./engine";
 import type { Clock, KymEvent } from "./engine";
 
+// Deterministic ids derived from the display name — a BYTE-FOR-BYTE port of the
+// desktop kym_core slug()/id scheme ("grp:"/"cat:"/"acct:" + slug). This is what
+// makes a "Groceries" created on the phone and one created in Basecamp collapse
+// to the SAME id on merge, instead of producing two duplicates. The separator is
+// a colon (matching desktop), NOT the hyphen the old constants used.
+export function slug(name: string): string {
+  let s = "";
+  let prevDash = false;
+  for (const ch of name) {
+    const l = ch.toLowerCase();
+    if ((l >= "a" && l <= "z") || (l >= "0" && l <= "9")) { s += l; prevDash = false; }
+    else if (s && !prevDash) { s += "-"; prevDash = true; }
+  }
+  while (s.endsWith("-")) s = s.slice(0, -1);
+  // Desktop falls back to a random hex slug for an all-punctuation name; match it.
+  return s || Math.random().toString(16).slice(2, 10);
+}
+export const grpId = (name: string) => "grp:" + slug(name);
+export const catId = (name: string) => "cat:" + slug(name);
+export const acctId = (name: string) => "acct:" + slug(name);
+
 // Stable ids so a re-seed is deterministic and categories are referenceable.
 export const DEFAULT_ACCOUNT = "acct-checking";
 export const DEFAULT_CASH = "acct-cash";

@@ -8,6 +8,8 @@ export {
   checkInvariant,
   mergeEvents,
   suggestCategory,
+  netWorth,
+  spendingReport,
 } from "@kym/engine";
 export type {
   BudgetState,
@@ -32,5 +34,7 @@ export {
   formatMoney,
   CURRENCIES,
   DEFAULT_CURRENCY,
+  Role,
 } from "@kym/contract";
 export type { KymEvent, HLC, Money } from "@kym/contract";
+export type { Member } from "@kym/engine";

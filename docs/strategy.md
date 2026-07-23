@@ -18,7 +18,7 @@ Every paid feature must be justifiable as *"we ran a server / covered a real cos
 | **Actual Budget** | self-host | free | yes | yes | — |
 | **KYM** | **p2p, no server** | **free core** | **yes (E2E)** | **yes** | **local** |
 
-KYM = *YNAB's method + Actual's ownership + real p2p privacy + a private AI + zero-ops sync/backup.* Nobody occupies that square: the privacy-conscious YNAB refugee who doesn't want to self-host a server.
+KYM aims to be *YNAB's method + Actual's ownership + real p2p privacy + a private AI (today a read-only prototype) + p2p sync.* Durable off-site **backup is planned, not yet available** (Codex is pre-mainnet). Target user: the privacy-conscious YNAB refugee who doesn't want to self-host a server.
 
 ## Funding, in two horizons
 
@@ -33,7 +33,7 @@ KYM is a **flagship local-first consumer app on the Logos stack** — Waku for s
 - "Your Emergency Fund earns ~X% while it waits." Framed as a budgeting feature, not a crypto feature.
 - Non-custodial keeps us out of the "we hold your money" line and matches self-custody / local-first.
 - EUR-native fits the CZK/EUR audience.
-- **Concrete stack (researched — see `research-defi.md`):** Monerium **EURe on Gnosis Chain** (MiCA-compliant e-money token, free 1:1 SEPA on/off-ramp to a personal IBAN) → **sDAI ~4–4.6%** or an **Aave Stable Vault** (ERC-4626, low-risk, no impermanent loss). Fee cut via a **0x/LI.FI integrator fee** skimmed on-chain to KYM's wallet (MetaMask does exactly this at 0.875%). **Account-abstraction wallet** (passkey, no seed phrase, sponsored gas) for onboarding. **Guardrail: strictly non-custodial + transaction-construction-only + no advice**, to stay clear of MiCA CASP authorization (mandatory for EU crypto services after 1 Jul 2026) — get EU counsel before launch.
+- **Concrete stack (researched — see `research-defi.md`):** Monerium **EURe on Gnosis Chain** (MiCA-compliant e-money token, free 1:1 SEPA on/off-ramp to a personal IBAN) → **sDAI ~4–4.6%** or an **Aave Stable Vault** (ERC-4626, low-risk, no impermanent loss). Fee cut via a **0x/LI.FI integrator fee** skimmed on-chain to KYM's wallet (MetaMask does exactly this at 0.875%). **Account-abstraction wallet** (passkey, no seed phrase, sponsored gas) for onboarding. **Intended guardrail: strictly non-custodial + transaction-construction-only + no advice.** The hope is this keeps KYM outside MiCA CASP authorization (mandatory for EU crypto services after 1 Jul 2026), but that is an **unconfirmed, jurisdiction-sensitive legal position, not a settled fact — it requires EU counsel before any launch, and none of this is implemented.**
 
 **2. Voluntary one-time licence fee.** A "pay once if you value it" supporter licence — no gating, no nag-ware, purely voluntary (Obsidian-catalyst / itch.io style). Keeps goodwill and funds baseline dev.
 
@@ -41,7 +41,7 @@ KYM is a **flagship local-first consumer app on the Logos stack** — Waku for s
 Logos / IFT / Status ecosystem grant — flagship local-first consumer app on Waku (+ Codex, + Nym). Non-dilutive first money.
 
 ## Guardrails
-- **Fully open-source, nothing gated.** Users must be able to verify nothing leaks; the trust moat is total transparency, not a free/paid split.
+- **Fully open-source, nothing gated.** Users can audit the code to see that *content* is end-to-end encrypted; the trust moat is total transparency, not a free/paid split. (Note: transport **metadata** privacy — timing/traffic analysis on Waku — is future work via Nym, so "nothing leaks" is not yet literally true.)
 - **Non-custodial always.** We construct transactions; the user's wallet signs. We never take custody of funds — legally and ethically the safest line, and consistent with local-first.
 - **DeFi is opt-in and honest about risk** (smart-contract risk, stablecoin depeg, yields vary). Never the default; never hidden.
 - **No token for the budget app itself** — the audience is privacy + pragmatism, not speculation.

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { ev, RTA_INFLOW, ccpCategoryId, AccountType } from "@kym/contract";
-import { computeState, checkInvariant } from "@kym/engine";
+import { computeState, checkInvariant, listTransactions } from "@kym/engine";
 
 // A tiny deterministic HLC factory so tests don't depend on the wall clock.
 function clock(dev) {
@@ -208,5 +208,72 @@ test("income to Ready-to-Assign inflow feeds the pool", () => {
   const s = computeState(events);
   assert.equal(s.readyToAssign, 500000);
   assert.equal(s.balances.chk, 500000);
+  assert.ok(checkInvariant(s).ok);
+});
+
+// --- category / group lifecycle (parity with kym_core: delete / archive) -----
+
+test("category.delete removes an empty category and its plan entries", () => {
+  const h = mk("A");
+  const events = [
+    ev.accountCreate(h(), { accountId: "chk", name: "Checking", accountType: AccountType.CHECKING, startingBalance: 100000, startDate: dateIn(M) }),
+    ev.groupCreate(h(), { groupId: "g1", name: "Everyday" }),
+    ev.categoryCreate(h(), { categoryId: "groc", groupId: "g1", name: "Groceries" }),
+    ev.categoryCreate(h(), { categoryId: "oops", groupId: "g1", name: "Oops" }),
+    ev.categoryDelete(h(), { categoryId: "oops" }),
+  ];
+  const s = computeState(events);
+  assert.equal(s.categories.find((c) => c.id === "oops"), undefined, "deleted category is gone");
+  assert.ok(s.categories.find((c) => c.id === "groc"), "sibling survives");
+  assert.ok(checkInvariant(s).ok, JSON.stringify(checkInvariant(s)));
+});
+
+test("category.archive hides but keeps history; unarchive restores; balances unaffected", () => {
+  const h = mk("A");
+  const events = [
+    ev.accountCreate(h(), { accountId: "chk", name: "Checking", accountType: AccountType.CHECKING, startingBalance: 100000, startDate: dateIn(M) }),
+    ev.categoryCreate(h(), { categoryId: "sub", groupId: "g1", name: "Old subscription" }),
+    ev.assign(h(), { categoryId: "sub", month: M, amount: 5000 }),
+    ev.txnCreate(h(), { txnId: "t1", accountId: "chk", amount: -5000, date: dateIn(M), categoryId: "sub" }),
+    ev.categoryArchive(h(), { categoryId: "sub" }),
+  ];
+  const s = computeState(events);
+  assert.deepEqual(s.archivedCategories, ["sub"]);
+  assert.equal(s.categories.find((c) => c.id === "sub").archived, true, "flagged archived");
+  assert.equal(s.categoryAvailable.sub, 0, "history kept — available still 0");
+  assert.ok(checkInvariant(s).ok, JSON.stringify(checkInvariant(s)));
+
+  const s2 = computeState([...events, ev.categoryUnarchive(h(), { categoryId: "sub" })]);
+  assert.deepEqual(s2.archivedCategories, [], "unarchive restores");
+  assert.equal(s2.categories.find((c) => c.id === "sub").archived, false);
+});
+
+test("group.delete removes an empty group", () => {
+  const h = mk("A");
+  const events = [
+    ev.groupCreate(h(), { groupId: "g1", name: "Everyday" }),
+    ev.groupCreate(h(), { groupId: "g2", name: "Stale" }),
+    ev.groupDelete(h(), { groupId: "g2" }),
+  ];
+  const s = computeState(events);
+  assert.ok(s.groups.find((g) => g.id === "g1"));
+  assert.equal(s.groups.find((g) => g.id === "g2"), undefined);
+});
+
+test("an author payload key stamped at commit rides through the fold onto the transaction", () => {
+  const h = mk("A");
+  const txn = ev.txnCreate(h(), { txnId: "t1", accountId: "chk", amount: -5000, date: dateIn(M), categoryId: "groc" });
+  // Attribution is stamped at the commit/append boundary into the payload — exactly
+  // how kym_core's pushEvent sets e.s["author"] — NOT via the typed constructor
+  // (which drops unknown keys). It then rides the wire + fold as a passthrough key.
+  txn.payload.author = "Vašek";
+  const events = [
+    ev.accountCreate(h(), { accountId: "chk", name: "Checking", accountType: AccountType.CHECKING, startingBalance: 100000, startDate: dateIn(M) }),
+    ev.categoryCreate(h(), { categoryId: "groc", groupId: "g1", name: "Groceries" }),
+    txn,
+  ];
+  const s = computeState(events);
+  const txns = listTransactions(events);
+  assert.equal(txns.find((t) => t.txnId === "t1").author, "Vašek");
   assert.ok(checkInvariant(s).ok);
 });

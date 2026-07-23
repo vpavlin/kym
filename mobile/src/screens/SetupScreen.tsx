@@ -1,7 +1,7 @@
 // Setup / seed. One tap seeds a meaningful demo budget so balances are non-trivial;
 // or add your own account/category. Also the reset. Nothing here is special — it
 // just emits the same account.create / category.create events the desktop uses.
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import {
   Alert,
   Pressable,
@@ -13,7 +13,6 @@ import {
 } from "react-native";
 import { useBudget } from "../state/BudgetContext";
 import { formatMoney, toMilli, CURRENCIES } from "../lib/engine";
-import { GROUP_EVERYDAY } from "../lib/budget";
 import { theme } from "../ui/theme";
 
 const ACCOUNT_TYPES = ["checking", "savings", "cash", "creditCard", "tracking"];
@@ -26,10 +25,24 @@ export function SetupScreen() {
     resetAll,
     addAccount,
     addCategory,
+    deleteCategory,
+    archiveCategory,
+    unarchiveCategory,
+    deviceId,
+    syncStatus,
+    peerInfo,
     events,
     budgetCurrency,
     setBudgetCurrency,
+    authorName,
+    setAuthorName,
+    currentBudgetColor,
+    syncError,
+    reconnect,
   } = useBudget();
+  const styles = useMemo(() => makeStyles(currentBudgetColor), [currentBudgetColor]);
+
+  const [nameInput, setNameInput] = useState(authorName);
 
   const [acctName, setAcctName] = useState("");
   const [acctType, setAcctType] = useState("checking");
@@ -37,11 +50,64 @@ export function SetupScreen() {
   const [acctCurrency, setAcctCurrency] = useState(budgetCurrency);
 
   const [catName, setCatName] = useState("");
-  const [catGroup, setCatGroup] = useState<string>(GROUP_EVERYDAY);
+  const [catGroup, setCatGroup] = useState<string>("Everyday");  // group NAME, not id
 
   const groups = state.groups;
   const alreadySeeded = state.accounts.length > 0;
   const hasAccounts = state.accounts.length > 0;
+
+  // A category with any assignment/move/txn history can't be deleted (would orphan
+  // money) — it's archived instead (hidden, kept). Mirrors the desktop rule.
+  const catHasHistory = (id: string) =>
+    events.some((e) => {
+      const p: any = e.payload;
+      return (
+        (e.type === "assign" && p?.categoryId === id) ||
+        (e.type === "move" && (p?.fromCategoryId === id || p?.toCategoryId === id)) ||
+        (e.type === "txn.create" && p?.categoryId === id) ||
+        (Array.isArray(p?.splits) && p.splits.some((s: any) => s?.categoryId === id))
+      );
+    });
+
+  const onRemoveCategory = (c: { id: string; name: string }) => {
+    if (catHasHistory(c.id)) {
+      Alert.alert(
+        `Archive "${c.name}"?`,
+        "It has history, so it's hidden (not deleted). Its Available must be 0 first.",
+        [
+          { text: "Cancel", style: "cancel" },
+          {
+            text: "Archive",
+            onPress: async () => {
+              try {
+                await archiveCategory(c.id);
+              } catch (e: any) {
+                Alert.alert("Couldn't archive", e?.message ?? String(e));
+              }
+            },
+          },
+        ]
+      );
+    } else {
+      Alert.alert(`Delete "${c.name}"?`, "This category has no history.", [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              await deleteCategory(c.id);
+            } catch (e: any) {
+              Alert.alert("Couldn't delete", e?.message ?? String(e));
+            }
+          },
+        },
+      ]);
+    }
+  };
+
+  const activeCats = state.categories.filter((c) => !c.archived && !c.hidden);
+  const archivedCats = state.categories.filter((c) => c.archived);
 
   return (
     <ScrollView style={styles.root} contentContainerStyle={{ paddingBottom: 40 }}>
@@ -171,34 +237,140 @@ export function SetupScreen() {
           value={catName}
           onChangeText={setCatName}
         />
-        {groups.length > 0 ? (
+        {/* Group is a NAME the user can type — the category's group is created on
+            the fly if it doesn't exist yet (no need to seed a budget first). The
+            chips are quick-fills for groups that already exist. This is the
+            category "group" (Bills / Everyday), NOT the household "group budget"
+            below — two different things that used to be confusingly conflated. */}
+        <TextInput
+          style={styles.input}
+          placeholder="Group (e.g. Everyday, Bills)"
+          placeholderTextColor={theme.textDim}
+          value={catGroup}
+          onChangeText={setCatGroup}
+          autoCapitalize="words"
+        />
+        {groups.length > 0 && (
           <View style={styles.chipRow}>
             {groups.map((g) => (
               <Pressable
                 key={g.id}
-                style={[styles.chip, catGroup === g.id && styles.chipActive]}
-                onPress={() => setCatGroup(g.id)}
+                style={[styles.chip, catGroup === g.name && styles.chipActive]}
+                onPress={() => setCatGroup(g.name)}
               >
-                <Text style={[styles.chipText, catGroup === g.id && styles.chipTextActive]}>
+                <Text style={[styles.chipText, catGroup === g.name && styles.chipTextActive]}>
                   {g.name}
                 </Text>
               </Pressable>
             ))}
           </View>
-        ) : (
-          <Text style={styles.note}>Seed the demo budget first to create groups.</Text>
         )}
         <Pressable
           style={styles.secondary}
           onPress={async () => {
             if (!catName.trim()) return Alert.alert("Name required");
-            if (groups.length === 0) return Alert.alert("Seed a budget first (needs a group)");
-            await addCategory(catName.trim(), catGroup);
+            await addCategory(catName.trim(), catGroup.trim() || "Everyday");
             setCatName("");
           }}
         >
           <Text style={styles.secondaryText}>Add category</Text>
         </Pressable>
+      </View>
+
+      {/* Manage categories — delete (history-free) or archive (with history). */}
+      {(activeCats.length > 0 || archivedCats.length > 0) && (
+        <>
+          <Text style={styles.section}>Manage categories</Text>
+          <View style={styles.card}>
+            {activeCats.map((c) => (
+              <View key={c.id} style={styles.rowBetween}>
+                <Text style={styles.rowText}>{c.name}</Text>
+                <Pressable style={styles.rowAction} onPress={() => onRemoveCategory(c)}>
+                  <Text style={styles.rowActionText}>
+                    {catHasHistory(c.id) ? "Archive" : "Delete"}
+                  </Text>
+                </Pressable>
+              </View>
+            ))}
+            {activeCats.length === 0 && (
+              <Text style={styles.note}>No active categories.</Text>
+            )}
+            {archivedCats.length > 0 && (
+              <>
+                <Text style={[styles.note, { marginTop: 12, fontWeight: "700" }]}>
+                  Archived ({archivedCats.length})
+                </Text>
+                {archivedCats.map((c) => (
+                  <View key={c.id} style={styles.rowBetween}>
+                    <Text style={[styles.rowText, { color: theme.textDim }]}>{c.name}</Text>
+                    <Pressable
+                      style={styles.rowAction}
+                      onPress={async () => {
+                        try {
+                          await unarchiveCategory(c.id);
+                        } catch (e: any) {
+                          Alert.alert("Couldn't restore", e?.message ?? String(e));
+                        }
+                      }}
+                    >
+                      <Text style={styles.rowActionText}>Un-archive</Text>
+                    </Pressable>
+                  </View>
+                ))}
+              </>
+            )}
+          </View>
+        </>
+      )}
+
+      {/* Your name — attribution stamped on transactions you add (shared budgets). */}
+      <Text style={styles.section}>Your name</Text>
+      <View style={styles.card}>
+        <Text style={styles.note}>
+          Stamped on transactions you add, so a shared budget shows who did what.
+          Leave empty for no attribution.
+        </Text>
+        <TextInput
+          style={styles.input}
+          placeholder="e.g. Vašek"
+          placeholderTextColor={theme.textDim}
+          value={nameInput}
+          onChangeText={setNameInput}
+          autoCapitalize="words"
+        />
+        <Pressable
+          style={styles.secondary}
+          onPress={async () => {
+            await setAuthorName(nameInput.trim());
+            Alert.alert("Saved", nameInput.trim() ? `Attributing to “${nameInput.trim()}”.` : "Attribution turned off.");
+          }}
+        >
+          <Text style={styles.secondaryText}>Save name</Text>
+        </Pressable>
+      </View>
+
+      {/* Sync & this device. Group membership/roles were removed: in the current
+          model, sharing a budget's code grants full access to it (any member can
+          read/write) — real per-member group management will come from libchat. */}
+      <Text style={styles.section}>Sync &amp; device</Text>
+      <View style={styles.card}>
+        <Text style={styles.note}>This device's id: {deviceId}</Text>
+        {/* Connectivity. "syncing" only means the node started — the peer/mesh
+            counts are what say whether anything can actually reach us. */}
+        <Text style={styles.note}>
+          Sync: {syncStatus}
+          {peerInfo ? ` · ${peerInfo.peers} ${peerInfo.peers === 1 ? "peer" : "peers"}` : ""}
+        </Text>
+        {syncError ? (
+          <Text style={[styles.note, { color: theme.warn }]}>{syncError}</Text>
+        ) : null}
+        <Pressable style={[styles.secondary, { marginTop: 8 }]} onPress={() => reconnect()}>
+          <Text style={styles.secondaryText}>Reconnect (try another region)</Text>
+        </Pressable>
+        <Text style={styles.note}>
+          If it connects but nothing arrives (“filter 0”), the fleet region isn’t serving us —
+          tap Reconnect to try the next one.
+        </Text>
       </View>
 
       {/* Danger zone. */}
@@ -226,7 +398,8 @@ export function SetupScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (accent: string) =>
+  StyleSheet.create({
   root: { flex: 1, paddingHorizontal: 16 },
   title: { color: theme.text, fontSize: 24, fontWeight: "800", marginTop: 12 },
   sub: { color: theme.textDim, marginTop: 4, marginBottom: 16 },
@@ -256,12 +429,32 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: theme.border,
   },
-  chipActive: { backgroundColor: theme.accent, borderColor: theme.accent },
+  chipActive: { backgroundColor: accent, borderColor: accent },
   chipDisabled: { opacity: 0.4 },
   chipText: { color: theme.textDim, fontWeight: "600", fontSize: 13 },
   chipTextActive: { color: theme.accentText },
+  chipSm: {
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderRadius: 999,
+    backgroundColor: theme.surfaceAlt,
+    borderWidth: 1,
+    borderColor: theme.border,
+  },
+  chipTextSm: { color: theme.textDim, fontWeight: "600", fontSize: 11 },
+  memberRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingVertical: 8,
+    borderTopWidth: 1,
+    borderTopColor: theme.border,
+    flexWrap: "wrap",
+  },
+  memberName: { color: theme.text, fontWeight: "700", fontSize: 14 },
+  memberMeta: { color: theme.textDim, fontSize: 11, marginTop: 2 },
   primary: {
-    backgroundColor: theme.accent,
+    backgroundColor: accent,
     borderRadius: 12,
     paddingVertical: 16,
     alignItems: "center",
@@ -275,6 +468,23 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   secondaryText: { color: theme.text, fontWeight: "700" },
+  rowBetween: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: theme.border,
+  },
+  rowText: { color: theme.text, fontSize: 15, flex: 1 },
+  rowAction: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: theme.border,
+  },
+  rowActionText: { color: accent, fontWeight: "700", fontSize: 13 },
   danger: {
     backgroundColor: theme.surface,
     borderRadius: 12,

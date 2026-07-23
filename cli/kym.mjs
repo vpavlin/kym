@@ -15,8 +15,8 @@
 
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { ev, Clock, toMilli, fromMilli, formatMoney, DEFAULT_CURRENCY, monthOf, AccountType, RTA_INFLOW } from "@kym/contract";
-import { computeState, checkInvariant, mergeEvents, listTransactions, suggestCategory } from "@kym/engine";
+import { ev, Clock, Role, toMilli, fromMilli, formatMoney, DEFAULT_CURRENCY, monthOf, AccountType, RTA_INFLOW } from "@kym/contract";
+import { computeState, checkInvariant, mergeEvents, listTransactions, suggestCategory, netWorth, spendingReport } from "@kym/engine";
 import { parseExport, fingerprint } from "./importers.mjs";
 import { readFileSync as fsRead } from "node:fs";
 
@@ -207,6 +207,70 @@ switch (cmd) {
     break;
   }
 
+  case "group": {
+    const sub = positionals()[0];
+    const doc = load();
+    if (sub !== "init") die("usage: kym group init [name]");
+    const state = stateOf(doc);
+    if (state.isGroup) die("this budget is already a group");
+    const name = positionals().slice(1).join(" ") || "Household";
+    const c = clockFor(doc);
+    // The initializing device becomes the founding admin.
+    doc.events.push(ev.groupInit(c.send(), { name, founderId: doc.device, founderName: doc.device }));
+    save(doc);
+    console.log(`Turned this budget into a group "${name}". You (${doc.device}) are the admin.`);
+    console.log(`Add members with:  kym member add <their-device-id> --role editor|viewer`);
+    break;
+  }
+
+  case "member": {
+    const sub = positionals()[0];
+    const doc = load();
+    const c = clockFor(doc);
+    const roleOf = (v) => {
+      const r = String(v || "").toLowerCase();
+      if (![Role.ADMIN, Role.EDITOR, Role.VIEWER].includes(r)) die(`role must be admin|editor|viewer`);
+      return r;
+    };
+    if (sub === "add") {
+      const memberId = positionals()[1] || die("usage: kym member add <device-id> [--role editor] [--name N]");
+      const role = roleOf(argValue("--role") || Role.EDITOR);
+      const name = argValue("--name") || memberId;
+      doc.events.push(ev.memberAdd(c.send(), { memberId, name, role }));
+      save(doc);
+      console.log(`+ added ${name} (${memberId}) as ${role}`);
+    } else if (sub === "role") {
+      const memberId = positionals()[1] || die("usage: kym member role <device-id> <admin|editor|viewer>");
+      const role = roleOf(positionals()[2]);
+      doc.events.push(ev.memberRole(c.send(), { memberId, role }));
+      save(doc);
+      console.log(`~ ${memberId} is now ${role}`);
+    } else if (sub === "remove") {
+      const memberId = positionals()[1] || die("usage: kym member remove <device-id>");
+      doc.events.push(ev.memberRemove(c.send(), { memberId }));
+      save(doc);
+      console.log(`- removed ${memberId} (their later edits will be ignored on merge)`);
+    } else {
+      die("usage: kym member <add|role|remove> …");
+    }
+    break;
+  }
+
+  case "members": {
+    const doc = load();
+    const state = stateOf(doc);
+    if (!state.isGroup) { console.log("\n  Not a group budget. Run: kym group init\n"); break; }
+    console.log(`\n  Members (device: ${doc.device})`);
+    console.log(`  ${"─".repeat(44)}`);
+    for (const m of state.members) {
+      const you = m.id === doc.device ? "  ← you" : "";
+      const status = m.active ? m.role : `${m.role} (removed)`;
+      console.log(`  ${(m.name || m.id).padEnd(20)} ${status.padEnd(18)}${you}`);
+    }
+    console.log("");
+    break;
+  }
+
   case "budget": {
     const doc = load();
     const state = stateOf(doc, M ? { asOf: M } : {});
@@ -341,23 +405,16 @@ switch (cmd) {
     const doc = load();
     const state = stateOf(doc);
     const budgetCcy = doc.currency || DEFAULT_CURRENCY;
-    const byCcy = {};
-    for (const a of state.accounts) {
-      const ccy = a.currency || budgetCcy;
-      (byCcy[ccy] ??= { net: 0, rows: [] });
-      const bal = state.balances[a.id] || 0;
-      byCcy[ccy].net += bal;
-      byCcy[ccy].rows.push({ name: a.name, type: a.type, bal, onBudget: a.onBudget });
-    }
+    // Shared builder — same net-worth data mobile/desktop use (one source of truth).
+    const { currencies: codes, byCurrency } = netWorth(state, budgetCcy);
     console.log(`\n  Net worth`);
     console.log(`  ${"─".repeat(44)}`);
-    const codes = Object.keys(byCcy);
     for (const ccy of codes) {
-      for (const r of byCcy[ccy].rows) {
-        console.log(`  ${r.name.padEnd(20)} ${formatMoney(r.bal, ccy).padStart(16)}  ${r.type}`);
+      for (const r of byCurrency[ccy].rows) {
+        console.log(`  ${r.name.padEnd(20)} ${formatMoney(r.balance, ccy).padStart(16)}  ${r.type}`);
       }
       console.log(`  ${"─".repeat(44)}`);
-      console.log(`  ${("Net (" + ccy + ")").padEnd(20)} ${formatMoney(byCcy[ccy].net, ccy).padStart(16)}`);
+      console.log(`  ${("Net (" + ccy + ")").padEnd(20)} ${formatMoney(byCurrency[ccy].net, ccy).padStart(16)}`);
       if (codes.length > 1) console.log("");
     }
     if (codes.length > 1) console.log("  (currencies shown separately — KYM does not convert with an exchange rate)");
@@ -371,11 +428,8 @@ switch (cmd) {
     const state = stateOf(doc, { asOf: month });
     const ccy = doc.currency || DEFAULT_CURRENCY;
     const f = (x) => formatMoney(x, ccy);
-    const rows = state.categories.map((cat) => {
-      const r = state.categoryMonths.filter((x) => x.categoryId === cat.id && x.month === month)[0];
-      return { name: cat.name, spent: r ? -Math.min(0, r.activity) : 0 };
-    }).filter((r) => r.spent > 0).sort((a, b) => b.spent - a.spent);
-    const total = rows.reduce((s, r) => s + r.spent, 0);
+    // Shared builder — same spending data mobile/desktop use.
+    const { rows, total } = spendingReport(state, month);
     console.log(`\n  Spending — ${month}`);
     console.log(`  ${"─".repeat(40)}`);
     for (const r of rows) {
@@ -413,6 +467,11 @@ switch (cmd) {
   kym reconcile <account> <actual-balance> [--adjust]
   kym report [--month YYYY-MM]
   kym networth
+  kym group init [name]                       turn this budget into a group (you become admin)
+  kym member add <device-id> [--role editor|viewer] [--name N]
+  kym member role <device-id> <admin|editor|viewer>
+  kym member remove <device-id>
+  kym members                                 list members and their roles
   kym sync <other-budget.json>
   kym log
 
