@@ -177,6 +177,14 @@ private:
     void ingestRaw(const std::string& contentTopic, const std::string& sealed);
     void sealAndSend(Budget& b, const kym::Event& e);
     void sendSyncReq();
+    // Publish a sealed (base64) payload on a topic, ROBUST to either delivery build:
+    // newer builds want a JSON byte array and throw "type must be array, but is
+    // string" on a string; older builds want a string. We probe once (array→string),
+    // cache the representation that didn't throw, and reuse it. Wire bytes are
+    // identical — this only picks the in-process IPC shape. Prevents the SIGABRT that
+    // an env-only gate (KYM_SEND_ARRAY) left on GUI hosts that can't set env.
+    void deliverySend(const std::string& topic, const std::string& sealedB64);
+    int m_sendRepr = 0; // 0=unprobed, 1=byte array, 2=string
     // RBSR reconcile: broadcast our event-id set (id+hlc) so a peer can compute
     // and send back ONLY the events we're missing — replaces re-sending the whole
     // log. See kym_reconcile_std.hpp / packages/sync/src/reconcile.mjs.

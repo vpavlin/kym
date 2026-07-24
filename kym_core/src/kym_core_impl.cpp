@@ -99,15 +99,10 @@ LogosMap bytesPayload(const std::string &s) {
     for (unsigned char c : s) a.push_back((unsigned)c);
     return a;
 }
-// The delivery bstr payload TYPE differs by cpp-sdk: newer builds (the headless
-// hub, KYM_SEND_ARRAY=1) marshal a JSON byte ARRAY and throw on a string; older
-// builds (the desktop Basecamp today) take a JSON string. Wire bytes are
-// identical, so a hub and an old-SDK peer still interop — this only picks the
-// local in-process representation. Default (no env) = string, safe for Basecamp.
-LogosMap sealedPayload(const std::string &b64) {
-    if (std::getenv("KYM_SEND_ARRAY")) return bytesPayload(b64);
-    return LogosMap(b64);
-}
+// NOTE: which in-process representation delivery's send() accepts (byte array vs
+// string) differs by cpp-sdk build and is now chosen at runtime by
+// KymCoreImpl::deliverySend (probe array→string, cache the winner) rather than a
+// build-time/env default — so a GUI host that can't set env never crashes on it.
 } // namespace
 
 kym::HLC KymCoreImpl::nextHlc() {
@@ -1275,15 +1270,28 @@ void KymCoreImpl::sealAndSend(Budget &b, const kym::Event &e) {
     if (!m_nodeReady || !b.haveKey) return;
     kym::Bytes nonce(12); RAND_bytes(nonce.data(), 12);
     kym::Bytes sealed = kym::seal(b.identity, kym::strBytes(kym::encodeEventEnvelopeStd(e)), b.topic, nonce);
-    LogosMap payload = sealedPayload(b64encode(std::string(sealed.begin(), sealed.end())));
-    // ASYNC, always. The sync send() blocks the calling thread through a lightpush
-    // attempt that, with no lightpush peers, stalls for seconds before falling back
-    // to relay. On the host's event-loop thread (the GUI's snapshot poll, the hub's
-    // QTimer, the delivery receive callback) that freezes EVERYTHING — every button
-    // goes dead and the heartbeat stalls until the send returns. That was the
-    // "core module stuck" bug. Fire-and-forget: delivery reports real send outcomes
-    // via its own messageSent/messageError events; we don't need the result here.
-    modules().delivery_module.sendAsync(b.topic, payload, [](StdLogosResult) {});
+    deliverySend(b.topic, b64encode(std::string(sealed.begin(), sealed.end())));
+}
+
+// Publish a sealed payload, ROBUST to either delivery build (see header). Probes
+// array→string once, caches the representation that didn't throw. KYM_SEND_ARRAY
+// still forces the array shape (skips the probe). ASYNC/fire-and-forget: a sync
+// send() would block the event-loop thread through a stalling lightpush and freeze
+// the module (the "core stuck" bug); delivery reports outcomes via its own events.
+void KymCoreImpl::deliverySend(const std::string &topic, const std::string &b64) {
+    static const bool forceArray = std::getenv("KYM_SEND_ARRAY") != nullptr;
+    auto attempt = [&](int repr) -> bool {
+        try {
+            LogosMap p = (repr == 1) ? bytesPayload(b64) : LogosMap(b64);
+            modules().delivery_module.sendAsync(topic, p, [](StdLogosResult) {});
+            return true;
+        } catch (...) { return false; }
+    };
+    if (forceArray) { attempt(1); return; }
+    if (m_sendRepr == 1 || m_sendRepr == 2) { if (attempt(m_sendRepr)) return; m_sendRepr = 0; }
+    if (attempt(1)) { m_sendRepr = 1; return; }        // newer builds (current fleet)
+    if (attempt(2)) { m_sendRepr = 2; return; }        // older builds (string payload)
+    fprintf(stderr, "KYMTX deliverySend: no working payload representation\n");
 }
 
 void KymCoreImpl::sendSyncReq() {
@@ -1293,15 +1301,7 @@ void KymCoreImpl::sendSyncReq() {
     LogosMap env = {{"v", 1}, {"type", "SYNC_REQ"}, {"from", m_deviceId}};
     kym::Bytes nonce(12); RAND_bytes(nonce.data(), 12);
     kym::Bytes sealed = kym::seal(cur().identity, kym::strBytes(env.dump()), cur().topic, nonce);
-    LogosMap payload = sealedPayload(b64encode(std::string(sealed.begin(), sealed.end())));
-    // ASYNC, always. The sync send() blocks the calling thread through a lightpush
-    // attempt that, with no lightpush peers, stalls for seconds before falling back
-    // to relay. On the host's event-loop thread (the GUI's snapshot poll, the hub's
-    // QTimer, the delivery receive callback) that freezes EVERYTHING — every button
-    // goes dead and the heartbeat stalls until the send returns. That was the
-    // "core module stuck" bug. Fire-and-forget: delivery reports real send outcomes
-    // via its own messageSent/messageError events; we don't need the result here.
-    modules().delivery_module.sendAsync(cur().topic, payload, [](StdLogosResult) {});
+    deliverySend(cur().topic, b64encode(std::string(sealed.begin(), sealed.end())));
 }
 
 // RBSR: broadcast our event-id set (each {w:hlc wall, i:id}) — small metadata,
@@ -1320,15 +1320,7 @@ void KymCoreImpl::sendSummary(Budget &b) {
     LogosMap env = {{"v", 1}, {"type", "SUMMARY"}, {"from", m_deviceId}, {"items", items}};
     kym::Bytes nonce(12); RAND_bytes(nonce.data(), 12);
     kym::Bytes sealed = kym::seal(b.identity, kym::strBytes(env.dump()), b.topic, nonce);
-    LogosMap payload = sealedPayload(b64encode(std::string(sealed.begin(), sealed.end())));
-    // ASYNC, always. The sync send() blocks the calling thread through a lightpush
-    // attempt that, with no lightpush peers, stalls for seconds before falling back
-    // to relay. On the host's event-loop thread (the GUI's snapshot poll, the hub's
-    // QTimer, the delivery receive callback) that freezes EVERYTHING — every button
-    // goes dead and the heartbeat stalls until the send returns. That was the
-    // "core module stuck" bug. Fire-and-forget: delivery reports real send outcomes
-    // via its own messageSent/messageError events; we don't need the result here.
-    modules().delivery_module.sendAsync(b.topic, payload, [](StdLogosResult) {});
+    deliverySend(b.topic, b64encode(std::string(sealed.begin(), sealed.end())));
     fprintf(stderr, "KYMTX SUMMARY items=%zu\n", b.log.size());
 }
 
