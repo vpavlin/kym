@@ -146,6 +146,11 @@ private:
         int64_t wall = 0, ctr = 0;
         std::string viewMonth;                       // "" = live month, else the YYYY-MM viewed
         int64_t lastAutoResync = 0, lastSummaryTx = 0, lastFullServe = 0;
+        // Store-seed burst: on each node-ready we publish the whole log a few times
+        // (over the first ~90s, then stop) so the fleet store captures it and a phone
+        // that can't get its own SYNC_REQ through the mesh can still store-pull the
+        // history. NOT a perpetual rebroadcast — decremented to 0 and left there.
+        int seedStoreRemaining = 0;
         std::string seedCatId; int seedTicks = 0;    // hub demo seed (per budget)
     };
 

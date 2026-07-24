@@ -1075,6 +1075,11 @@ void KymCoreImpl::bootstrapDelivery() {
                     b.subscribed = true;
                     modules().delivery_module.subscribeAsync(b.topic, [](StdLogosResult) {});
                     sendSummary(b);
+                    // Arm the store-seed burst: maybeAutoResync (every ~30s) will push
+                    // the whole log this many times, then stop — seeding the fleet store
+                    // for phones that can't get a SYNC_REQ through. Re-armed on restart.
+                    b.seedStoreRemaining = 3;
+                    b.lastAutoResync = 0;   // let the first seed fire on the next tick
                 }
                 publishBudget();       // reflect "paired" now that the node is up
                 refreshPeerCount();    // and start reporting who we can actually reach
@@ -1434,13 +1439,16 @@ void KymCoreImpl::maybeAutoResync(Budget &b) {
     if (b.lastAutoResync != 0 && now - b.lastAutoResync < 30000) return;
     b.lastAutoResync = now;
     sendSummary(b);   // reconcile: peers send only the events we lack, and vice versa
-    // RBSR needs BOTH peers to talk: exchange summaries, then send diffs. A mobile
-    // peer can RECEIVE but its publishes don't propagate through the gossip mesh, so
-    // it can never trigger a reconcile — it just sees summaries and starves. So
-    // EVERY node (Basecamp desktop AND the hub) also PUSHES its whole log every
-    // ~60s; a receive-only device dedups by id and catches up. Cheap for a household
-    // budget; the RBSR path still handles the efficient desktop↔desktop case.
-    if (b.lastFullServe == 0 || now - b.lastFullServe >= 60000) {
+    // Store-seed burst (NOT a perpetual rebroadcast). A phone can RECEIVE but its
+    // publishes don't reliably propagate through the mesh, so it can't get a SYNC_REQ
+    // to us to trigger a serve — it relies on store-pull instead, which needs the log
+    // to actually be IN the fleet store. The store only keeps what was published to
+    // relay, so we publish the whole log a FEW times right after the node comes up
+    // (seedStoreRemaining, set on node-ready). That seeds the store for the retention
+    // window; each hub restart re-seeds. After the burst we stop and leave ongoing
+    // sync to live-event publishing, RBSR summaries, and serve-on-SYNC_REQ.
+    if (b.seedStoreRemaining > 0) {
+        b.seedStoreRemaining--;
         b.lastFullServe = now;
         for (const auto &e : b.log) sealAndSend(b, e);
     }
