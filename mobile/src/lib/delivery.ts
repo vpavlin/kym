@@ -107,6 +107,10 @@ let rxSeen = 0, rxOpened = 0, txSent = 0, rxRaw = 0, rxSample = "";
 export function getRx(): { seen: number; opened: number; sent: number; raw: number; sample: string } {
   return { seen: rxSeen, opened: rxOpened, sent: txSent, raw: rxRaw, sample: rxSample };
 }
+// Last store-query outcome, surfaced in the Sync card so the first on-device run
+// tells us whether the fleet actually retains our shard (the make-or-break unknown).
+let storeInfo = "store: not run";
+export function getStoreInfo(): string { return storeInfo; }
 let routes: Route[] = [];
 let starting: Promise<{ ctx: string }> | null = null;
 let emitter: NativeEventEmitter | null = null;
@@ -280,6 +284,34 @@ function findPayload(obj: any, depth = 0): string | null {
   return null;
 }
 
+// A WakuMessage payload arrives either as a base64 STRING or a raw BYTE ARRAY
+// (number[]) — and when it's a byte array it may itself be the base64 *text* bytes
+// or the decoded sealed bytes. Produce every plausible sealed-bytes candidate; open()
+// is authenticated, so only the correct one decrypts. Shared by live receive + store.
+function payloadCandidates(payload: any): Uint8Array[] {
+  const out: Uint8Array[] = [];
+  if (Array.isArray(payload)) {
+    let s = "";
+    for (let i = 0; i < payload.length; i++) s += String.fromCharCode(payload[i] & 0xff);
+    try { out.push(toByteArray(s)); } catch { /* not base64 text */ }
+    out.push(Uint8Array.from(payload.map((b: number) => b & 0xff)));
+  } else if (typeof payload === "string") {
+    try { out.push(toByteArray(payload)); } catch { /* not base64 */ }
+  }
+  return out;
+}
+
+// Decrypt one payload with a SPECIFIC budget's key (store path: we queried that
+// budget's topic, so we know the route). Returns the parsed wire envelope or null.
+function openForRoute(payload: any, r: Route): any | null {
+  for (const sealed of payloadCandidates(payload)) {
+    try {
+      return JSON.parse(utf8Decode(open(r.id, sealed, r.topic)));
+    } catch { /* wrong candidate — try next */ }
+  }
+  return null;
+}
+
 /**
  * THE RECEIVE PATH (net-new vs Perun). Subscribe to the native `logosMessage`
  * event stream. Each emission is {wakuPtr, event} where `event` is the
@@ -314,19 +346,10 @@ export function startReceiving(
       const payload = wm && wm.payload != null ? wm.payload : m.payload;
       if (payload == null) return;
       rxSeen++; // a WakuMessage with a payload reached us over the mesh
-      // Build candidate sealed-bytes. We sent payload = base64(sealed); the native
-      // may deliver back either the raw base64-string bytes OR the decoded sealed
-      // bytes, so try both — open() is authenticated, only the right one decrypts.
-      const candidates: Uint8Array[] = [];
-      if (Array.isArray(payload)) {
-        let s = "";
-        for (let i = 0; i < payload.length; i++) s += String.fromCharCode(payload[i] & 0xff);
-        try { candidates.push(toByteArray(s)); } catch { /* not base64 text */ }
-        candidates.push(Uint8Array.from(payload.map((b: number) => b & 0xff)));
-      } else if (typeof payload === "string") {
-        try { candidates.push(toByteArray(payload)); } catch { /* not base64 */ }
-      }
-      // Route by decryption: for each candidate, try each budget's key.
+      // Build candidate sealed-bytes (base64-string bytes OR decoded bytes — the
+      // native side may deliver either). Route by decryption: for each candidate,
+      // try each budget's key. open() is authenticated, so only the right one wins.
+      const candidates = payloadCandidates(payload);
       for (const sealed of candidates) {
         for (const r of routes) {
           let plaintext: Uint8Array;
@@ -351,6 +374,96 @@ export function startReceiving(
     }
   });
   return () => sub.remove();
+}
+
+// How long to wait for a store node to answer one page, and the page size.
+const STORE_TIMEOUT_MS = 20000;
+const STORE_PAGE = 100;
+const STORE_MAX_PAGES = 25; // safety bound: 25 * 100 = 2500 events per topic
+
+/**
+ * PULL history from the fleet store — the reliable catch-up path. Unlike live
+ * receive (mesh-dependent) and SYNC_REQ (needs our publish to propagate, which the
+ * asymmetric mobile mesh doesn't guarantee), this asks a fleet store node directly
+ * for every message ever stored on each budget's content topic, then decrypts +
+ * folds them. No dependency on the phone being able to publish.
+ *
+ * For each budget topic we page through the store (paginationCursor) and try each
+ * bootstrap peer until one answers. Every stored message is decrypted with that
+ * budget's key and EVENT envelopes are handed to onEvent (which dedups by event id,
+ * so re-pulling is harmless). Returns a summary + sets storeInfo for the Sync card.
+ *
+ * NOTE: this only works if the fleet's store nodes retain traffic on our shard —
+ * the one unknown we can't verify off-device. The per-topic counts in the returned
+ * detail tell us immediately whether they do.
+ */
+export async function storeSync(
+  onEvent: (budgetId: string, event: KymEvent) => void
+): Promise<{ msgs: number; events: number; detail: string }> {
+  await ensureNode();
+  if (!node || typeof (LogosMessaging as any).storeQuery !== "function") {
+    storeInfo = "store: bridge missing (rebuild app)";
+    return { msgs: 0, events: 0, detail: storeInfo };
+  }
+  let totalMsgs = 0, totalEvents = 0;
+  const parts: string[] = [];
+  for (const r of routes) {
+    const label = r.topic.slice(7, 15); // short hex of the content topic
+    let cursor: any = undefined;
+    let topicMsgs = 0, topicEvents = 0, note = "";
+    for (let page = 0; page < STORE_MAX_PAGES; page++) {
+      const query: any = {
+        requestId: `kym-${Date.now()}-${page}`,
+        contentTopics: [r.topic],
+        includeData: true,
+        paginationForward: true,
+        paginationLimit: STORE_PAGE,
+      };
+      if (cursor) query.paginationCursor = cursor;
+      // Ask each fleet node until one answers this page.
+      let respStr: string | null = null;
+      for (const peer of BOOTSTRAP) {
+        try {
+          respStr = await (LogosMessaging as any).storeQuery(
+            node.ctx, JSON.stringify(query), peer, STORE_TIMEOUT_MS
+          );
+          if (respStr) break;
+        } catch {
+          respStr = null; // this store node failed — try the next
+        }
+      }
+      if (!respStr) { note = "no store peer answered"; break; }
+      // The JNI on_response returns the sentinel "on_response-ok" when the FFI calls
+      // back with an empty body — treat that as a successful empty result, not junk.
+      if (respStr.indexOf("{") !== 0) { note = respStr.slice(0, 40); break; }
+      let resp: any;
+      try { resp = JSON.parse(respStr); } catch { note = `bad json: ${respStr.slice(0, 30)}`; break; }
+      const status = resp.statusCode ?? resp.status_code;
+      if (status != null && status !== 200 && status !== 0) {
+        note = `status ${status} ${resp.statusDesc || resp.status_desc || ""}`.trim();
+      }
+      const msgs: any[] = resp.messages || resp.Messages || resp.messageData || [];
+      topicMsgs += msgs.length;
+      for (const entry of msgs) {
+        // Message may be nested under message/wakuMessage or be the message itself.
+        const wm = entry.message || entry.wakuMessage || entry;
+        const payload = wm && wm.payload != null ? wm.payload : entry.payload;
+        if (payload == null) continue;
+        const env = openForRoute(payload, r);
+        if (env && env.type === "EVENT" && env.event) {
+          onEvent(r.budgetId, env.event as KymEvent);
+          topicEvents++;
+        }
+      }
+      cursor = resp.paginationCursor ?? resp.pagination_cursor ?? resp.cursor;
+      if (!cursor || msgs.length === 0) break; // last page
+    }
+    totalMsgs += topicMsgs;
+    totalEvents += topicEvents;
+    parts.push(`${label}:${topicMsgs}m/${topicEvents}e${note ? `(${note})` : ""}`);
+  }
+  storeInfo = `store: ${totalMsgs} msg → ${totalEvents} ev  [${parts.join("  ")}]`;
+  return { msgs: totalMsgs, events: totalEvents, detail: storeInfo };
 }
 
 /**

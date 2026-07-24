@@ -46,6 +46,8 @@ import {
   refreshRoutes,
   stopNode,
   getRx,
+  storeSync,
+  getStoreInfo,
 } from "../lib/delivery";
 import { ensureSecret, saveSecret, loadIdentity, deleteSecret } from "../lib/identityStore";
 
@@ -121,6 +123,8 @@ interface BudgetContextValue {
   reconnect: () => Promise<void>;
   syncNow: () => Promise<void>;
   rxInfo: { seen: number; opened: number; sent: number; raw: number; sample: string };
+  /** Last store-query outcome (msg/event counts per topic). See getStoreInfo(). */
+  storeInfo: string;
   /** Live peer counts, or null when unavailable. See getPeerCount(). */
   peerInfo: { peers: number; mesh: number; shard: string } | null;
 }
@@ -160,6 +164,7 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
   const [retryTick, setRetryTick] = useState(0);   // bump to re-attempt the node bring-up
   const [peerInfo, setPeerInfo] = useState<{ peers: number; mesh: number; shard: string } | null>(null);
   const [rxInfo, setRxInfo] = useState<{ seen: number; opened: number; sent: number; raw: number; sample: string }>({ seen: 0, opened: 0, sent: 0, raw: 0, sample: "" });
+  const [storeInfo, setStoreInfo] = useState<string>("store: not run");
   const clockRef = useRef<Clock | null>(null);
   // Always-current view of the log for the receive callback (which is registered
   // once and otherwise would capture a stale `events`) and for best-effort sends.
@@ -228,7 +233,7 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
     let alive = true;
     const tick = async () => {
       const info = await getPeerCount();
-      if (alive) { setPeerInfo(info); setRxInfo(getRx()); }
+      if (alive) { setPeerInfo(info); setRxInfo(getRx()); setStoreInfo(getStoreInfo()); }
     };
     tick();
     const h = setInterval(tick, 5000);
@@ -263,6 +268,14 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
     }
     return next;
   }, []);
+
+  // Route an incoming event (from live receive OR store pull) by budget: the
+  // current budget folds into the live view; a background budget appends to disk.
+  // Stable identity so it can be handed to startReceiving/storeSync once.
+  const routeIncoming = useCallback((budgetId: string, event: KymEvent) => {
+    if (budgetId === currentBudgetIdRef.current) ingest([event]).catch(() => {});
+    else appendBudgetEventsToStorage(budgetId, [event]).catch(() => {});
+  }, [ingest]);
 
   const commit = useCallback(
     async (newEvents: KymEvent[]) => {
@@ -428,9 +441,14 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
   // to tap repeatedly — peers dedup by event id.
   const syncNow = useCallback(async () => {
     if (!syncActiveRef.current) return;
+    // Primary: pull the full history from the fleet store (reliable, no reliance on
+    // our own publish propagating). Then the SYNC_REQ + re-serve belt-and-suspenders.
+    storeSync(routeIncoming)
+      .then((s) => setStoreInfo(s.detail))
+      .catch(() => {});
     sendSyncReq(deviceIdRef.current).catch(() => {});
     reserveBudget(currentBudgetIdRef.current).catch(() => {});
-  }, [reserveBudget]);
+  }, [reserveBudget, routeIncoming]);
 
   // Permanently delete a budget on THIS device: drop its log, forget its household
   // key, and remove it from the registry. Destructive — the UI confirms hard. If it
@@ -475,10 +493,7 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
         // re-setup/restarting the native Waku node crashed the app. The Setup
         // screen shows the filter count + region so we can diagnose receive instead.
         unsub = startReceiving(
-          (budgetId, event) => {
-            if (budgetId === currentBudgetIdRef.current) ingest([event]).catch(() => {});
-            else appendBudgetEventsToStorage(budgetId, [event]).catch(() => {});
-          },
+          routeIncoming,
           (budgetId, from) => {
             if (!from || from === deviceIdRef.current) return; // never answer ourselves
             reserveBudget(budgetId).catch(() => {});
@@ -489,6 +504,13 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
         if (!alive) return;
         setSyncStatus("syncing");
         setSyncError(null);
+        // PULL history from the fleet store — the reliable catch-up (doesn't need our
+        // publish to propagate, unlike SYNC_REQ). Runs once on connect; folds every
+        // stored event (dedup by id). Falls back to SYNC_REQ for anything the store
+        // has aged out / when a live peer is present.
+        storeSync(routeIncoming)
+          .then((s) => { if (alive) setStoreInfo(s.detail); })
+          .catch(() => {});
         sendSyncReq(deviceIdRef.current).catch(() => {}); // pull anything we're missing
       } catch (e: any) {
         // NOT_PAIRED, UnsatisfiedLinkError (arm64 .so on x86_64), a rejected config,
@@ -843,6 +865,7 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
     reconnect,
     syncNow,
     rxInfo,
+    storeInfo,
     peerInfo,
   };
 

@@ -431,6 +431,31 @@ jobject Java_com_receiverandroid_LogosMessagingModule_wakuSend(JNIEnv *env, jobj
   return response;
 }
 
+// Store (history) query — the pull half of catch-up. liblogosdelivery exposes the
+// kernel waku_store_query (the desktop delivery_module does NOT bridge it, but the
+// phone only needs to READ history, and the fleet's store nodes retain relay
+// traffic). jsonQuery is an nwaku StoreQueryRequest:
+//   {"requestId","contentTopics":[...],"includeData":true,"paginationForward":true,
+//    "paginationLimit":100,"paginationCursor":<opt>}
+// peerAddr is the store node multiaddr to ask (a fleet bootstrap node). The reply
+// JSON (messages[] with base64 payloads + paginationCursor) is returned verbatim to
+// JS via on_response, which decrypts each payload exactly like a live receive.
+jobject Java_com_receiverandroid_LogosMessagingModule_wakuStoreQuery(JNIEnv *env, jobject thiz,
+                                                jlong wakuPtr,
+                                                jstring jsonQuery,
+                                                jstring peerAddr,
+                                                jint timeoutMs) {
+  cb_result *result = NULL;
+  const char *q = (*env)->GetStringUTFChars(env, jsonQuery, 0);
+  const char *peer = (*env)->GetStringUTFChars(env, peerAddr, 0);
+  waku_store_query((void *)wakuPtr, on_response, (void *)&result, q, peer, timeoutMs);
+  jobject response = to_jni_result(env, result);
+  free_cb_result(result);
+  (*env)->ReleaseStringUTFChars(env, jsonQuery, q);
+  (*env)->ReleaseStringUTFChars(env, peerAddr, peer);
+  return response;
+}
+
 void Java_com_receiverandroid_LogosMessagingModule_wakuSetEventCallback(JNIEnv *env, jobject thiz,
                                                      jlong wakuPtr) {
   cb_env *c = (cb_env *)malloc(sizeof(cb_env));

@@ -31,6 +31,7 @@ export function SetupScreen() {
     deviceId,
     syncStatus,
     peerInfo,
+    storeInfo,
     events,
     budgetCurrency,
     setBudgetCurrency,
@@ -376,6 +377,12 @@ export function SetupScreen() {
             this budget's topic, or the mesh isn't delivering). */}
         <Text style={styles.note}>
           Sent: {rxInfo.sent} · raw: {rxInfo.raw} · payload: {rxInfo.seen} · ours: {rxInfo.opened}
+        </Text>
+        {/* Store-pull outcome: msg = messages the fleet store returned, ev = those
+            that decrypted as our events. If this stays "0 msg", the fleet isn't
+            retaining our shard and history must come from a live peer instead. */}
+        <Text style={[styles.note, { fontFamily: "monospace", fontSize: 10 }]} numberOfLines={3}>
+          {storeInfo}
         </Text>
         {rxInfo.raw > 0 && rxInfo.opened === 0 && rxInfo.sample ? (
           <Text style={[styles.note, { fontFamily: "monospace", fontSize: 10 }]} numberOfLines={3}>

@@ -2,7 +2,7 @@
   "expo": {
     "name": "KYM",
     "slug": "kym",
-    "version": "0.13.11",
+    "version": "0.13.12",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "scheme": "kym",
