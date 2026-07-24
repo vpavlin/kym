@@ -29,6 +29,11 @@ export KYM_DEVICE_ID="${KYM_DEVICE_ID:-claude-hub}"
 # loop). Without it there is no view polling snapshot(), so delivery never starts
 # and nothing syncs. This is what makes the module behave as an always-on hub.
 export KYM_HUB="${KYM_HUB:-1}"
+# KYM_SEND_ARRAY=1 is REQUIRED for this (newer) delivery_module build: it marshals
+# the send payload as a JSON byte array and THROWS "type must be array, but is
+# string" on a string payload — which crashes kym_core (SIGABRT) on the first send.
+# The wire bytes are identical either way; this only picks the in-process shape.
+export KYM_SEND_ARRAY="${KYM_SEND_ARRAY:-1}"
 export QT_QPA_PLATFORM=offscreen
 export EMIT_FROM_THREAD=1
 
