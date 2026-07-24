@@ -29,6 +29,9 @@ export KYM_DEVICE_ID="${KYM_DEVICE_ID:-claude-hub}"
 # loop). Without it there is no view polling snapshot(), so delivery never starts
 # and nothing syncs. This is what makes the module behave as an always-on hub.
 export KYM_HUB="${KYM_HUB:-1}"
+# Use SDS Reliable Channels (channelCreate/channelSend) for sync instead of raw
+# relay send/subscribe. Requires kym_core >=0.7.0 + the channels delivery_module.
+export KYM_USE_CHANNELS="${KYM_USE_CHANNELS:-1}"
 # NOTE: kym_core >= 0.6.9 auto-probes the send payload representation (byte array
 # vs string) and caches the one the local delivery build accepts, so KYM_SEND_ARRAY
 # is no longer required — the module no longer crashes on the wrong shape. Set

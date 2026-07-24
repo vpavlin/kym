@@ -789,7 +789,7 @@ void KymCoreImpl::applySecret(Budget &b, const kym::Bytes &secret, bool persist)
     // first snapshot()/hub tick kicks bootstrapDelivery which subscribes them all.
     if (m_nodeReady) {
         b.subscribed = true;
-        modules().delivery_module.subscribeAsync(b.topic, [](StdLogosResult) {});
+        joinBudgetTransport(b);
         sendSummary(b);
     }
     if (m_ready) publishBudget();
@@ -1028,6 +1028,28 @@ void KymCoreImpl::bootstrapDelivery() {
             // unique topic). ingestRaw opens with THAT budget's key + ingests there.
             if (!b64.empty()) ingestRaw(contentTopic, b64decode(b64));
         });
+    // Reliable-Channel receive (SDS) — counterpart to channelSend. channelId == the
+    // budget's derived topic (we create the channel with id == topic), so route
+    // straight there. Same payload decode as the raw path. Registering both handlers
+    // is harmless: only the transport we actually joined delivers events.
+    modules().delivery_module.onChannelMessageReceived(
+        [this](const std::string &channelId, const std::string &, const LogosMap &payload, int64_t) {
+            auto toWire = [](const LogosMap &v) -> std::string {
+                if (v.is_string()) return v.get<std::string>();
+                if (v.is_array()) {
+                    std::string s; s.reserve(v.size());
+                    for (const auto &c : v) if (c.is_number_integer()) s.push_back((char)c.get<int>());
+                    return s;
+                }
+                if (v.is_object() && v.contains("_bytes") && v["_bytes"].is_string())
+                    return b64decode(v["_bytes"].get<std::string>());
+                return std::string();
+            };
+            std::string b64 = toWire(payload);
+            if (b64.empty() && payload.is_object() && payload.contains("payload"))
+                b64 = toWire(payload["payload"]);
+            if (!b64.empty()) ingestRaw(channelId, b64decode(b64));
+        });
     // IMPORTANT: run entirely through the ASYNC delivery callers. The sync
     // createNode()/start() block on network setup (connecting to the logos.dev
     // Waku fleet); calling them from onContextReady() stalls this module's
@@ -1068,7 +1090,7 @@ void KymCoreImpl::bootstrapDelivery() {
                     Budget &b = kv.second;
                     if (!b.haveKey) continue;
                     b.subscribed = true;
-                    modules().delivery_module.subscribeAsync(b.topic, [](StdLogosResult) {});
+                    joinBudgetTransport(b);
                     sendSummary(b);
                     // Arm the store-seed burst: maybeAutoResync (every ~30s) will push
                     // the whole log this many times, then stop — seeding the fleet store
@@ -1280,10 +1302,16 @@ void KymCoreImpl::sealAndSend(Budget &b, const kym::Event &e) {
 // the module (the "core stuck" bug); delivery reports outcomes via its own events.
 void KymCoreImpl::deliverySend(const std::string &topic, const std::string &b64) {
     static const bool forceArray = std::getenv("KYM_SEND_ARRAY") != nullptr;
+    static const bool useChannels = std::getenv("KYM_USE_CHANNELS") != nullptr;
     auto attempt = [&](int repr) -> bool {
         try {
             LogosMap p = (repr == 1) ? bytesPayload(b64) : LogosMap(b64);
-            modules().delivery_module.sendAsync(topic, p, [](StdLogosResult) {});
+            if (useChannels)
+                // channelId == the content topic — the reliable channel we joined for
+                // this budget. SDS handles ordering + gap detection + retransmit.
+                modules().delivery_module.channelSendAsync(topic, p, [](StdLogosResult) {});
+            else
+                modules().delivery_module.sendAsync(topic, p, [](StdLogosResult) {});
             return true;
         } catch (...) { return false; }
     };
@@ -1292,6 +1320,16 @@ void KymCoreImpl::deliverySend(const std::string &topic, const std::string &b64)
     if (attempt(1)) { m_sendRepr = 1; return; }        // newer builds (current fleet)
     if (attempt(2)) { m_sendRepr = 2; return; }        // older builds (string payload)
     fprintf(stderr, "KYMTX deliverySend: no working payload representation\n");
+}
+
+void KymCoreImpl::joinBudgetTransport(Budget &b) {
+    if (std::getenv("KYM_USE_CHANNELS"))
+        // Reliable Channel: channelId == contentTopic == the budget's derived topic,
+        // so all household devices join one SDS channel; senderId identifies us.
+        modules().delivery_module.channelCreateAsync(b.topic, b.topic, m_deviceId,
+                                                     [](StdLogosResult) {});
+    else
+        modules().delivery_module.subscribeAsync(b.topic, [](StdLogosResult) {});
 }
 
 void KymCoreImpl::sendSyncReq() {

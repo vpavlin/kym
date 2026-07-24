@@ -185,6 +185,10 @@ private:
     // an env-only gate (KYM_SEND_ARRAY) left on GUI hosts that can't set env.
     void deliverySend(const std::string& topic, const std::string& sealedB64);
     int m_sendRepr = 0; // 0=unprobed, 1=byte array, 2=string
+    // Join a budget's transport: a Reliable Channel (SDS) when KYM_USE_CHANNELS is
+    // set, else a raw content-topic subscription. channelId == the budget's derived
+    // topic (every household device shares one channel); senderId = our device id.
+    void joinBudgetTransport(Budget& b);
     // RBSR reconcile: broadcast our event-id set (id+hlc) so a peer can compute
     // and send back ONLY the events we're missing — replaces re-sending the whole
     // log. See kym_reconcile_std.hpp / packages/sync/src/reconcile.mjs.
