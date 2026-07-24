@@ -1,0 +1,25 @@
+[Unit]
+Description=KYM headless hub (logoscore daemon + kym_core, pinned to the logos.dev fleet)
+Documentation=https://github.com/vpavlin/kym
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# The launcher starts the daemon, loads kym_core, and stays in the foreground for
+# the daemon's lifetime. Adjust the path if you cloned the repo elsewhere.
+ExecStart=%h/kym/hub/kym-hub.sh
+# Auto-recover: if the daemon dies (crash, OOM, transient fleet loss that trips an
+# assert) systemd restarts the whole hub after a short backoff.
+Restart=always
+RestartSec=5
+# Give the daemon time to stop cleanly on `systemctl stop`.
+TimeoutStopSec=30
+# Optional overrides (uncomment / edit as needed):
+# Environment=LOGOSCORE=%h/logoscore-new/result/bin/logoscore
+# Environment=KYM_MODULES_DIR=%h/kym-hub/lmods-new2
+# Environment=KYM_CORE_DATA=%h/.kym-core
+# Environment=KYM_DEVICE_ID=claude-hub
+
+[Install]
+WantedBy=default.target
