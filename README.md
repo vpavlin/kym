@@ -82,3 +82,7 @@ The engine, contract, crypto, merge, and both module builds are green and cross-
 ## Principle
 
 One engine, thin surfaces. Money is never stored as a total — only as a fold over immutable facts. Availability comes from an always-on peer (the hub), not a server. Storage/backup is off the sync hot path.
+
+## License
+
+Dual-licensed under either **MIT** ([LICENSE-MIT](LICENSE-MIT)) or **Apache-2.0** ([LICENSE-APACHE](LICENSE-APACHE)) at your option — matching the Logos / Basecamp ecosystem.
