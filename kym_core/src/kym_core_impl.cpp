@@ -29,6 +29,16 @@ std::string uuidHex() {
     std::string s; for (int i = 0; i < 16; i++) { s.push_back(hx[b[i] >> 4]); s.push_back(hx[b[i] & 0xf]); }
     return s;
 }
+// A friendly, unique-ish default device name (two PGP words + 2 hex), e.g.
+// "brickyard-briefcase-3f". Random so two fresh devices never collide on the
+// literal "kym-core" default (which broke SDS sender/author distinction).
+std::string makeDeviceName() {
+    unsigned char b[3]; RAND_bytes(b, 3);
+    static const char *hx = "0123456789abcdef";
+    std::string s = std::string(kPgpEven[b[0]]) + "-" + kPgpOdd[b[1]];
+    s.push_back('-'); s.push_back(hx[b[2] >> 4]); s.push_back(hx[b[2] & 0xf]);
+    return s;
+}
 // human amount ("10.50", "-3") → integer milliunits (×1000), never float.
 kym::Money toMilli(const std::string &in) {
     size_t i = 0; while (i < in.size() && std::isspace((unsigned char)in[i])) i++;
@@ -136,7 +146,19 @@ void KymCoreImpl::onContextReady() {
     else if (const char *h = std::getenv("HOME")) dir = std::string(h) + "/.kym-core";
     if (!dir.empty()) { std::error_code ec; std::filesystem::create_directories(dir, ec);
         m_dataDir = std::filesystem::exists(dir, ec) ? dir : std::string(); }
+    // Device id: the SDS sender + CRDT event author ("dev"). MUST be unique per
+    // device — a shared value makes two devices indistinguishable on the channel.
+    // Precedence: env KYM_DEVICE_ID (hub/tests) > persisted <root>/device.txt >
+    // a freshly generated friendly name (persisted so it stays stable). Editable
+    // at runtime via setDeviceId (writes device.txt). Env, when set, wins on every
+    // launch — drop it to let the persisted/settings value control the name.
     if (const char *dev = std::getenv("KYM_DEVICE_ID")) m_deviceId = dev;
+    else if (!m_dataDir.empty()) {
+        std::ifstream df(m_dataDir + "/device.txt"); std::string persisted;
+        if (df && std::getline(df, persisted) && !persisted.empty()) m_deviceId = persisted;
+        else { m_deviceId = makeDeviceName();
+               std::ofstream o(m_dataDir + "/device.txt"); if (o) o << m_deviceId; }
+    }
     // Author attribution (optional): the human name stamped on events THIS device
     // authors, so a shared budget can show who added / last-edited each txn. It's
     // accountability, not permission — every device on a household key is a full
@@ -360,6 +382,16 @@ std::string KymCoreImpl::setAuthorName(std::string name) {
     std::lock_guard<std::recursive_mutex> lk(m_mtx);
     m_authorName = name;
     if (!m_dataDir.empty()) { std::ofstream af(m_dataDir + "/author.txt"); if (af) af << name; }
+    publishBudget(); return m_budgetJson;
+}
+// Rename this device. Persisted to device.txt so it survives restart. New events
+// (hlc.dev) use it immediately; the SDS transport senderId is fixed at channel
+// join, so a restart is needed for peers to see the new name on the wire.
+std::string KymCoreImpl::setDeviceId(std::string name) {
+    std::lock_guard<std::recursive_mutex> lk(m_mtx);
+    if (name.empty()) return m_budgetJson;
+    m_deviceId = name;
+    if (!m_dataDir.empty()) { std::ofstream df(m_dataDir + "/device.txt"); if (df) df << name; }
     publishBudget(); return m_budgetJson;
 }
 std::string KymCoreImpl::deleteTxn(std::string txnId) {
@@ -654,9 +686,23 @@ void KymCoreImpl::publishBudget() {
     // Sync telemetry: rx/tx counters so "nothing is happening" is distinguishable
     // from "messages arrive but are all dropped". openFail>0 means traffic IS
     // reaching us but under a different household key.
+    // Derive a human sync phase for the current budget so the ui can show whether
+    // we're up to date, behind, or still checking with peers.
+    int64_t nowMs = (int64_t)std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    const Budget &cb = cur();
+    std::string phase;
+    if (!m_nodeReady) phase = "offline";
+    else if (cb.missing > 0) phase = "fetching";                 // we know we lack N, pulling them
+    else if (cb.lastReconcile == 0 ||
+             (nowMs - cb.lastSummaryTx < 3000 && cb.lastReconcile <= cb.lastSummaryTx))
+        phase = "asking";                                        // asked peers, awaiting their diff
+    else phase = "uptodate";
     root["sync"] = { {"peers", m_peerCount}, {"rxSeen", m_rxSeen}, {"rxOpened", m_rxOpened},
                      {"rxOpenFail", m_rxOpenFail}, {"rxNew", m_rxNew}, {"rxDup", m_rxDup},
-                     {"rxDropped", m_rxDropped}, {"tx", m_txTotal} };
+                     {"rxDropped", m_rxDropped}, {"tx", m_txTotal},
+                     {"phase", phase}, {"missing", cb.missing},
+                     {"askedAt", cb.lastSummaryTx}, {"reconciledAt", cb.lastReconcile} };
 
     // --- Transaction list (expenses / income) for the ui TX view -------------
     // Light fold of the log's txn events (create + edit + sticky delete), newest
@@ -722,6 +768,7 @@ void KymCoreImpl::publishBudget() {
         root["currentBudgetName"] = m_budgets.count(m_current) ? m_budgets[m_current].name : std::string();
         root["currentBudgetColor"] = m_budgets.count(m_current) ? m_budgets[m_current].color : std::string("#7dd3fc");
         root["authorName"] = m_authorName;   // this device's attribution name ("" = off)
+        root["deviceId"] = m_deviceId;        // this device's id (SDS sender + event author "dev")
     }
 
     m_budgetJson = root.dump();
@@ -982,6 +1029,34 @@ std::string KymCoreImpl::pairWithCode(std::string code) {
     saveBudgets();
     publishBudget();
     return "";
+}
+
+// Join a shared household as a NEW budget entry (ported from the mobile app's
+// joinBudget). Unlike pairWithCode this never touches the current budget — it adds
+// a fresh entry keyed to the shared secret, so a hub/desktop can hold many
+// households at once. If we already hold this household, just switch to it.
+std::string KymCoreImpl::joinBudget(std::string name, std::string code) {
+    std::lock_guard<std::recursive_mutex> lk(m_mtx);
+    auto pos = code.find("s=");
+    if (pos != std::string::npos && code.rfind("kym://", 0) == 0) code = code.substr(pos + 2);
+    kym::Bytes s = b32decode(code);
+    if (s.size() != 32) return "invalid pairing code";
+    // Already hold this household? Switch instead of duplicating.
+    const std::string topic = kym::topicFor(kym::deriveIdentity(s));
+    for (auto &kv : m_budgets)
+        if (kv.second.haveKey && kv.second.topic == topic) { m_current = kv.first; publishBudget(); return m_budgetJson; }
+    if (name.empty()) name = "Shared budget";
+    const std::string id = newBudgetId();
+    Budget &b = m_budgets[id];
+    b.id = id; b.name = name; b.color = kBudgetColors[m_order.size() % 6];
+    b.dir = m_dataDir.empty() ? "" : (m_dataDir + "/" + id);
+    m_order.push_back(id);
+    applySecret(b, s, true);       // key the NEW budget to the shared secret + subscribe/reconcile
+    if (b.haveKey && !b.topic.empty()) b.color = budgetColorForSeed(b.topic);
+    m_current = id;
+    saveBudgets();
+    publishBudget();
+    return m_budgetJson;
 }
 
 std::string KymCoreImpl::ingestSealed(std::string sealedHex) {
@@ -1258,12 +1333,16 @@ void KymCoreImpl::ingestRaw(const std::string &contentTopic, const std::string &
         for (const auto &e : b.log) if (peerNeeds.count(e.id)) { sealAndSend(b, e); sent++; }
         fprintf(stderr, "KYMRX SUMMARY peer_items=%zu peer_needs=%zu sent=%d we_lack=%zu\n",
                 theirs.size(), peerNeeds.size(), sent, d.aNeeds.size());
-        // d.aNeeds = ids WE lack. Re-summarize so this peer serves them back.
-        if (!d.aNeeds.empty()) {
-            int64_t now = (int64_t)std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::system_clock::now().time_since_epoch()).count();
-            if (now - b.lastSummaryTx >= 2000) sendSummary(b);
-        }
+        int64_t now = (int64_t)std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        b.missing = (long)d.aNeeds.size();   // what WE still lack → drives the sync indicator
+        b.lastReconcile = now;
+        // Re-summarize when EITHER side is behind, throttled: `d.aNeeds` non-empty =
+        // WE lack events (ask the peer to serve them); `peerNeeds` non-empty = the
+        // PEER is behind (send our summary so IT learns its own deficit and can show
+        // "Syncing N" instead of silently being pushed to). Converges as the gap → 0.
+        if ((!d.aNeeds.empty() || !peerNeeds.empty()) && now - b.lastSummaryTx >= 2000) sendSummary(b);
+        publishBudget();   // surface the fresh sync state (behind / up to date) to the ui
         return;
     }
     if (type != "EVENT") { m_rxDropped++; return; }
@@ -1276,6 +1355,7 @@ void KymCoreImpl::ingestRaw(const std::string &contentTopic, const std::string &
     loadPersistedLog(b);             // merge shared log first (multi-instance safety)
     if (b.ids.count(e.id)) { m_rxDup++; return; }
     m_rxNew++;
+    if (b.missing > 0) b.missing--;   // fetched one of the events we were behind on
     b.ids.insert(e.id); b.log.push_back(e);
     savePersistedLog(b);
     publishBudget();                 // ingested — refold + notify the UI; never re-broadcast

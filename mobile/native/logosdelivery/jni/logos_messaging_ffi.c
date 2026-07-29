@@ -431,6 +431,58 @@ jobject Java_com_receiverandroid_LogosMessagingModule_wakuSend(JNIEnv *env, jobj
   return response;
 }
 
+// --- Reliable Channels bridge -------------------------------------------------
+// The SDS-channel counterpart of subscribe/send. channelCreate joins the channel
+// (channelId == contentTopic == the household topic, senderId == this device id);
+// channelSend publishes { "payload":"<base64>", "ephemeral":false } on it; received
+// messages arrive through the SAME event callback as "onChannelMessageReceived".
+// This is what lets the phone interoperate with a KYM_USE_CHANNELS desktop/hub —
+// the raw subscribe/send path can't decode the SDS reliable-channel framing.
+jobject Java_com_receiverandroid_LogosMessagingModule_wakuChannelCreate(JNIEnv *env, jobject thiz,
+                                                jlong wakuPtr,
+                                                jstring channelId,
+                                                jstring contentTopic,
+                                                jstring senderId) {
+  cb_result *result = NULL;
+  const char *cid = (*env)->GetStringUTFChars(env, channelId, 0);
+  const char *ct = (*env)->GetStringUTFChars(env, contentTopic, 0);
+  const char *sid = (*env)->GetStringUTFChars(env, senderId, 0);
+  logosdelivery_channel_create((void *)wakuPtr, on_response, (void *)&result, cid, ct, sid);
+  jobject response = to_jni_result(env, result);
+  free_cb_result(result);
+  (*env)->ReleaseStringUTFChars(env, channelId, cid);
+  (*env)->ReleaseStringUTFChars(env, contentTopic, ct);
+  (*env)->ReleaseStringUTFChars(env, senderId, sid);
+  return response;
+}
+
+jobject Java_com_receiverandroid_LogosMessagingModule_wakuChannelSend(JNIEnv *env, jobject thiz,
+                                                jlong wakuPtr,
+                                                jstring channelId,
+                                                jstring messageJson) {
+  cb_result *result = NULL;
+  const char *cid = (*env)->GetStringUTFChars(env, channelId, 0);
+  const char *msg = (*env)->GetStringUTFChars(env, messageJson, 0);
+  logosdelivery_channel_send((void *)wakuPtr, on_response, (void *)&result, cid, msg);
+  jobject response = to_jni_result(env, result);
+  free_cb_result(result);
+  (*env)->ReleaseStringUTFChars(env, channelId, cid);
+  (*env)->ReleaseStringUTFChars(env, messageJson, msg);
+  return response;
+}
+
+jobject Java_com_receiverandroid_LogosMessagingModule_wakuChannelClose(JNIEnv *env, jobject thiz,
+                                                jlong wakuPtr,
+                                                jstring channelId) {
+  cb_result *result = NULL;
+  const char *cid = (*env)->GetStringUTFChars(env, channelId, 0);
+  logosdelivery_channel_close((void *)wakuPtr, on_response, (void *)&result, cid);
+  jobject response = to_jni_result(env, result);
+  free_cb_result(result);
+  (*env)->ReleaseStringUTFChars(env, channelId, cid);
+  return response;
+}
+
 // Store (history) query — the pull half of catch-up. liblogosdelivery exposes the
 // kernel waku_store_query (the desktop delivery_module does NOT bridge it, but the
 // phone only needs to READ history, and the fleet's store nodes retain relay

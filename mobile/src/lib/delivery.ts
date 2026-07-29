@@ -16,6 +16,7 @@ import { loadIdentity } from "./identityStore";
 import { loadRegistry } from "./budgets";
 import { seal, open, topicFor, Identity } from "./identity";
 import type { KymEvent } from "./engine";
+import { getDeviceId } from "./device";
 
 const { LogosMessaging } = NativeModules as { LogosMessaging: any };
 
@@ -37,6 +38,32 @@ const BOOTSTRAP = [
 /** True if the native module is present in this build at all. */
 export function deliveryAvailable(): boolean {
   return !!LogosMessaging;
+}
+
+// Sync transport: SDS Reliable Channels — matches the desktop hub/Basecamp which
+// now run with KYM_USE_CHANNELS. Over a channel the wire payload is the SAME sealed
+// envelope (received messages arrive on the same event stream and decrypt exactly
+// the same), so ONLY join + send differ; the raw subscribe/send path can't decode
+// the SDS channel framing. Flip to false only to talk to a legacy raw-relay peer.
+const USE_CHANNELS = true;
+
+// Join a budget's household on the wire: a reliable channel (channelId ==
+// contentTopic == the derived topic, senderId == this device) or, in raw mode, a
+// plain content-topic subscription.
+async function joinRoute(ctx: string, r: Route, deviceId: string): Promise<void> {
+  if (USE_CHANNELS) await LogosMessaging.channelCreate(ctx, r.topic, r.topic, deviceId);
+  else await LogosMessaging.subscribeContentTopic(ctx, r.topic);
+}
+
+// Publish sealed bytes (base64) on a budget's household. A channel send carries only
+// { payload, ephemeral } — the channel already knows its topic; raw send needs the
+// contentTopic in the envelope.
+async function publishSealed(ctx: string, r: Route, sealedB64: string): Promise<void> {
+  if (USE_CHANNELS) {
+    await LogosMessaging.channelSend(ctx, r.topic, JSON.stringify({ payload: sealedB64, ephemeral: false }));
+  } else {
+    await LogosMessaging.send(ctx, JSON.stringify({ contentTopic: r.topic, payload: sealedB64, ephemeral: false }));
+  }
 }
 
 // UTF-8 <-> bytes, hand-rolled: no TextEncoder/TextDecoder guaranteed on Hermes,
@@ -178,7 +205,8 @@ export async function ensureNode(onStatus?: (s: string) => void): Promise<string
     // subscribes to a non-existent shard and the node receives NOTHING (that was the
     // sync bug — see logos_messaging_ffi.c). With relay:true this joins the gossip
     // mesh for that shard, so we receive relayed messages.
-    for (const r of routes) await LogosMessaging.subscribeContentTopic(c, r.topic);
+    const deviceId = await getDeviceId();
+    for (const r of routes) await joinRoute(c, r, deviceId);
     onStatus?.("Forming mesh…");
     await new Promise((r) => setTimeout(r, SETTLE_MS));
     const n = { ctx: c };
@@ -186,7 +214,10 @@ export async function ensureNode(onStatus?: (s: string) => void): Promise<string
     // Re-subscribe periodically so a new budget's topic (added via refreshRoutes)
     // and any dropped subscription self-heal. Idempotent.
     if (renewTimer) clearInterval(renewTimer);
-    {
+    // Raw content-topic subscriptions lease-expire on the fleet, so renew them.
+    // Reliable channels persist their own SDS state (re-creating could reset it), so
+    // there's nothing to renew in channel mode.
+    if (!USE_CHANNELS) {
       renewTimer = setInterval(() => {
         for (const r of routes) {
           LogosMessaging.subscribeContentTopic(n.ctx, r.topic).catch(() => {
@@ -220,13 +251,8 @@ export async function sendEnvelope(event: KymEvent, budgetId: string): Promise<v
   if (!r) return; // this budget has no household key on this device — nothing to send
   const envelope = { v: 1, type: "EVENT", event };
   const sealed = seal(r.id, utf8Bytes(JSON.stringify(envelope)), r.topic);
-  const messageJson = JSON.stringify({
-    contentTopic: r.topic,
-    payload: fromByteArray(sealed),
-    ephemeral: false,
-  });
-  await LogosMessaging.send(node!.ctx, messageJson);
-  txSent++; // published to the fleet (lightpush/relay)
+  await publishSealed(node!.ctx, r, fromByteArray(sealed));
+  txSent++; // published to the fleet (channel/relay)
 }
 
 /**
@@ -238,7 +264,8 @@ export async function sendEnvelope(event: KymEvent, budgetId: string): Promise<v
 export async function refreshRoutes(): Promise<void> {
   if (!node) return;
   routes = await buildRoutes();
-  for (const r of routes) await LogosMessaging.subscribeContentTopic(node.ctx, r.topic).catch(() => {});
+  const deviceId = await getDeviceId();
+  for (const r of routes) await joinRoute(node.ctx, r, deviceId).catch(() => {});
 }
 
 /**
@@ -257,12 +284,7 @@ export async function sendSyncReq(deviceId: string): Promise<void> {
   for (const r of routes) {
     const envelope = { v: 1, type: "SYNC_REQ", from: deviceId };
     const sealed = seal(r.id, utf8Bytes(JSON.stringify(envelope)), r.topic);
-    const messageJson = JSON.stringify({
-      contentTopic: r.topic,
-      payload: fromByteArray(sealed),
-      ephemeral: false,
-    });
-    await LogosMessaging.send(node!.ctx, messageJson).catch(() => {});
+    await publishSealed(node!.ctx, r, fromByteArray(sealed)).catch(() => {});
   }
 }
 

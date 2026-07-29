@@ -63,6 +63,9 @@ public:
     // Set this device's attribution name (persisted to <root>/author.txt). Stamped
     // on every event this device authors so a shared budget shows who did what.
     std::string setAuthorName(std::string name);
+    // Rename this device (persisted to <root>/device.txt). It's the SDS sender +
+    // the CRDT event author "dev"; must stay unique per device.
+    std::string setDeviceId(std::string name);
     // Month navigation. The view folds `asOf` a chosen month so past/future months
     // show correct rolled-forward Available (the engine already carries balances
     // month to month). "" resets to the live calendar month. Assign/move target
@@ -112,6 +115,9 @@ public:
     // generator skips any method with a trailing comment on its declaration line.
     std::string listBudgets();
     std::string createBudget(std::string name);
+    // Join a shared household from a pairing code as a NEW budget entry (does NOT
+    // re-key the current budget, unlike pairWithCode). Switches to it if already held.
+    std::string joinBudget(std::string name, std::string code);
     std::string selectBudget(std::string id);
     std::string renameBudget(std::string id, std::string name);
     std::string setBudgetColor(std::string id, std::string color);
@@ -146,6 +152,8 @@ private:
         int64_t wall = 0, ctr = 0;
         std::string viewMonth;                       // "" = live month, else the YYYY-MM viewed
         int64_t lastAutoResync = 0, lastSummaryTx = 0, lastFullServe = 0;
+        long missing = 0;            // events WE lack per the last reconcile (d.aNeeds)
+        int64_t lastReconcile = 0;   // ms of the last SUMMARY we processed
         // Store-seed burst: on each node-ready we publish the whole log a few times
         // (over the first ~90s, then stop) so the fleet store captures it and a phone
         // that can't get its own SYNC_REQ through the mesh can still store-pull the

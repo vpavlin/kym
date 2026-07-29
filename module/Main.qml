@@ -58,6 +58,38 @@ Item {
     // default when the core doesn't report a colour (old core / single budget).
     readonly property color accent: (budget.currentBudgetColor && String(budget.currentBudgetColor).length) ? budget.currentBudgetColor : "#7dd3fc"
 
+    // ---- sync state (core publishes budget.sync.phase/missing; old core → derive) ----
+    readonly property var syncInfo: budget.sync || ({})
+    readonly property int syncMissing: syncInfo.missing || 0
+    readonly property string syncPhase: syncInfo.phase
+        ? syncInfo.phase
+        : (budget.paired ? "uptodate" : "offline")   // fallback for a pre-0.7.3 core
+    // Catch-up on a LAN is near-instant, so hold the busy state ~1.6s after the last
+    // active signal — otherwise "Syncing… N" flashes by faster than the eye.
+    property bool syncHold: false
+    property int syncHoldMissing: 0
+    Timer { id: syncHoldTimer; interval: 1600; onTriggered: { root.syncHold = false; root.syncHoldMissing = 0 } }
+    onBudgetJsonChanged: {
+        var busy = (syncPhase === "fetching" || syncPhase === "asking");
+        if (busy || syncMissing > 0) {
+            root.syncHold = true;
+            if (syncMissing > root.syncHoldMissing) root.syncHoldMissing = syncMissing;
+            syncHoldTimer.restart();
+        }
+    }
+    readonly property int syncShowMissing: Math.max(syncMissing, syncHoldMissing)
+    readonly property bool syncBusy: syncPhase === "fetching" || syncPhase === "asking" || syncHold
+    readonly property string syncLabel:
+          syncPhase === "offline"  ? "Offline"
+        : syncShowMissing > 0      ? ("Syncing… " + syncShowMissing + (syncShowMissing === 1 ? " item" : " items"))
+        : syncPhase === "asking"   ? "Checking peers…"
+        : syncBusy                 ? "Syncing…"
+        : "Up to date"
+    readonly property color syncColor:
+          syncPhase === "offline" ? dim
+        : syncBusy                ? accent
+        : good
+
     // multiple budgets (gated on a core that reports them — old core → no switcher)
     readonly property var budgets: budget.budgets || []
     readonly property string currentBudgetName: budget.currentBudgetName || "My budget"
@@ -66,6 +98,9 @@ Item {
     // shared budget so you can see who did what). "" = off. Needs kym_core ≥ 0.6.3.
     readonly property string authorName: budget.authorName || ""
     readonly property bool hasAttribution: budget.authorName !== undefined
+    // This device's id — the SDS sender + CRDT event author ("dev" in the log).
+    readonly property string deviceName: budget.deviceId || ""
+    readonly property bool hasDeviceId: budget.deviceId !== undefined
 
     property string action: ""       // money-operation form: "" | expense | income | assign | move | target | reconcile
     property bool showSettings: false // gear view
@@ -423,7 +458,24 @@ Item {
                             MouseArea { id: todayMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
                                 onClicked: root.gotoMonth("") }
                         }
-                        Text { text: "·  " + status; color: dim; font.pixelSize: 12; verticalAlignment: Text.AlignVCenter }
+                        RowLayout {
+                            spacing: 6
+                            Text { text: "·"; color: dim; font.pixelSize: 12 }
+                            Rectangle {
+                                implicitWidth: 8; implicitHeight: 8; radius: 4; color: root.syncColor
+                                // pulse while busy; snap back to full opacity when idle
+                                opacity: root.syncBusy ? busyOpacity : 1.0
+                                property real busyOpacity: 1.0
+                                SequentialAnimation on busyOpacity {
+                                    running: root.syncBusy; loops: Animation.Infinite
+                                    NumberAnimation { to: 0.35; duration: 520 }
+                                    NumberAnimation { to: 1.0; duration: 520 }
+                                }
+                            }
+                            Text { text: root.syncLabel; color: dim; font.pixelSize: 12; verticalAlignment: Text.AlignVCenter
+                                   ToolTip.visible: syncHov.hovered; ToolTip.text: status }
+                            HoverHandler { id: syncHov }
+                        }
                     }
                 }
                 Item { Layout.fillWidth: true }
@@ -509,6 +561,29 @@ Item {
                         }
                     }
 
+                    // Device name — the id this device syncs under (SDS sender + event author).
+                    Rectangle {
+                        visible: root.hasDeviceId
+                        Layout.fillWidth: true; radius: 8; color: panel; border.color: line; border.width: 1
+                        implicitHeight: devCol.implicitHeight + 20
+                        ColumnLayout {
+                            id: devCol; anchors.left: parent.left; anchors.right: parent.right
+                            anchors.verticalCenter: parent.verticalCenter; anchors.margins: 14; spacing: 6
+                            Text { text: "Device name"; color: fg; font.pixelSize: 14; font.bold: true }
+                            Text { text: "Identifies this device on the sync channel and authors its events (the “dev” shown in the raw event log). Must be unique per device. A random name is set on first run — rename it to something recognizable."
+                                   color: dim; font.pixelSize: 11; Layout.fillWidth: true; wrapMode: Text.WordWrap }
+                            RowLayout {
+                                spacing: 8
+                                Field {
+                                    id: deviceField; implicitWidth: 220; placeholderText: "e.g. vasek-laptop"
+                                    text: root.deviceName
+                                    onAccepted: run(callCore("setDeviceId", [text.trim()]), "Device name saved — restart to update the sync sender")
+                                }
+                                Btn { label: "Save"; onClicked: run(callCore("setDeviceId", [deviceField.text.trim()]), "Device name saved — restart to update the sync sender") }
+                            }
+                        }
+                    }
+
                     // Seed
                     Rectangle {
                         Layout.fillWidth: true; radius: 8; color: panel; border.color: line; border.width: 1
@@ -575,10 +650,14 @@ Item {
                                     TextEdit { id: rawLink; opacity: 0; width: 0; height: 0; text: "kym://pair?s=" + (budget.pairingCode || "") }
                                 }
                             }
-                            RowLayout {
-                                spacing: 8
-                                Field { id: pairField; placeholderText: "paste another device's code / kym://pair link"; implicitWidth: 320 }
-                                Btn { label: "Join a shared budget"; onClicked: run(callCore("pairWithCode", [pairField.text]), "Joined — confirm the fingerprint matches the other device") }
+                            ColumnLayout {
+                                spacing: 6
+                                RowLayout {
+                                    spacing: 8
+                                    Field { id: joinNameField; placeholderText: "name for the joined budget"; implicitWidth: 160 }
+                                    Field { id: pairField; placeholderText: "paste another device's code / kym://pair link"; implicitWidth: 320 }
+                                }
+                                Btn { label: "Join a shared budget"; onClicked: run(callCore("joinBudget", [joinNameField.text.trim(), pairField.text.trim()]), "Joined as a new budget — confirm the fingerprint matches the other device") }
                             }
                         }
                     }
@@ -594,7 +673,18 @@ Item {
                             RowLayout {
                                 spacing: 10
                                 Btn { label: "Sync now"; onClicked: run(callCore("resync", []), "Asked peers + re-served our log") }
-                                Text { text: status; color: dim; font.pixelSize: 12; verticalAlignment: Text.AlignVCenter }
+                                Rectangle {
+                                    implicitWidth: 8; implicitHeight: 8; radius: 4; color: root.syncColor
+                                    opacity: root.syncBusy ? busyOpacity2 : 1.0
+                                    property real busyOpacity2: 1.0
+                                    SequentialAnimation on busyOpacity2 {
+                                        running: root.syncBusy; loops: Animation.Infinite
+                                        NumberAnimation { to: 0.35; duration: 520 }
+                                        NumberAnimation { to: 1.0; duration: 520 }
+                                    }
+                                }
+                                Text { text: root.syncLabel; color: fg; font.pixelSize: 12; font.bold: true; verticalAlignment: Text.AlignVCenter }
+                                Text { text: "· " + status; color: dim; font.pixelSize: 11; verticalAlignment: Text.AlignVCenter }
                             }
                             Text {
                                 visible: budget.sync !== undefined
@@ -710,7 +800,10 @@ Item {
                                     Text { text: "#" + modelData.seq; color: dim; font.pixelSize: 11; font.family: "monospace" }
                                     Text { text: modelData.type || ""; color: accent; font.pixelSize: 12; font.bold: true; font.family: "monospace" }
                                     Item { Layout.fillWidth: true }
-                                    Text { text: modelData.dev || ""; color: dim; font.pixelSize: 10; font.family: "monospace" }
+                                    // Author (device id). Highlighted when it's THIS device's own event.
+                                    Text { text: modelData.dev ? "by " + modelData.dev : ""
+                                           color: (modelData.dev && modelData.dev === root.deviceName) ? accent : dim
+                                           font.pixelSize: 10; font.family: "monospace" }
                                 }
                                 Text {
                                     Layout.fillWidth: true
