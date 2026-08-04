@@ -9,7 +9,7 @@ KYM is a local-first, p2p, zero-based envelope budget on the Logos stack. Two ap
 │ KYM MOBILE (RN / Expo)       │   /kym/1/<household>/proto (E2E enc)   │ KYM BASECAMP MODULE (ui_qml)     │
 │ Android-first                │◄─────────────────────────────────────►│ desktop, C++/Qt + QML            │
 │                              │                                        │                                  │
-│  quick-add (amount-first)    │                                        │  delivery_module subscribe/send  │
+│  quick-add (amount-first)    │        SDS Reliable Channels           │  delivery_module · SDS channels  │
 │  on-device OCR (ML Kit)      │                                        │  SQLite: append-only event log   │
 │  local event log (SQLite)    │                                        │  engine fold (C++) → BudgetState │
 │  engine fold (TS) → balances │                                        │  QML: grid / register / reports  │
@@ -32,6 +32,8 @@ KYM is a local-first, p2p, zero-based envelope budget on the Logos stack. Two ap
 3. Phone: encrypt event (household key) → `delivery.send('/kym/1/<household>/proto', payload)`. If offline, it queues; save is never blocked on network.
 4. Every other device receives it → base64-decode → decrypt → **dedup by event `id`** → append to its log → re-fold. Converged.
 5. No balance is ever transmitted. Only immutable facts move. Any device can be offline for arbitrarily long and still converge on reconnect (union of events).
+
+**Transport:** the send/receive in steps 3–4 runs over **SDS Reliable Channels** (`channelCreate`/`channelSend`/`onChannelMessageReceived`) — the household topic is one channel, KYM's sealed envelope is the payload (no-op channel encryption), SDS handles ordering/retransmit and our RBSR reconcile backstops it. Desktop, headless hub, and the mobile app are all bound to this transport and verified end-to-end on real hardware. See decisions [#22](decisions.md) (why channels) and [#23](decisions.md) (the four fixes mobile needed).
 
 ## Why the module is the "hub"
 

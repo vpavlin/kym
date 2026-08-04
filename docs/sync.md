@@ -103,14 +103,23 @@ sort causally after everything it already knows. `append` and `ingest` are both 
 re-appending a known `id`, or re-ingesting an already-seen message, is a no-op — which is
 what makes Waku Store re-delivery harmless.
 
-**The transports plug in *under* this core:**
+**The transports plug in *under* this core.** The live transport is **SDS Reliable Channels**
+(`channelCreate` / `channelSend` / `onChannelMessageReceived`), not raw relay — see
+[decision #22](decisions.md). `channelId == contentTopic == the household's derived topic`,
+`senderId == deviceId`; KYM's own sealed envelope is the channel payload (the channel runs the
+no-op encryption provider). SDS gives ordering/gap-detection/retransmit; our RBSR reconcile
+backstops it.
 
-- **Desktop module** — the C++ backend subscribes/publishes via `delivery_module`
-  (`subscribe(topic, …)` / `send(topic, payload)`, base64 over the FFI). On an inbound
-  message it runs the same open → decode → dedup → append → fold pipeline (the
-  `kym_crypto.hpp` + `kym_wire.hpp` + `kym_engine.hpp` mirror of `SyncNode.ingest`).
-- **Mobile** — React Native embeds `liblogosdelivery` via JNI (the `receiver-android`
-  pattern); the JS side drives the same `SyncNode` API.
+- **Desktop module / hub** — the C++ backend joins via `delivery_module`
+  `channelCreate(topic,topic,deviceId)` + `channelSend` (base64 over the FFI, gated by
+  `KYM_USE_CHANNELS`). On an inbound channel message it runs the same open → decode → dedup →
+  append → fold pipeline (the `kym_crypto.hpp` + `kym_wire.hpp` + `kym_engine.hpp` mirror of
+  `SyncNode.ingest`).
+- **Mobile** — React Native embeds a channels-enabled arm64 `liblogosdelivery` via JNI (the
+  `receiver-android` pattern); the JS side drives the same `SyncNode` API. Channels-only. Three
+  non-obvious things are required to make receive work — subscribe the content topic *and*
+  `channelCreate`, honour the double-base64 payload convention, and an Android-specific
+  online-monitor patch; all four fixes are in [decision #23](decisions.md).
 
 Because all the correctness lives in `SyncNode` + `@kym/engine`, the adapters are "just
 move bytes" — the part most likely to differ per platform holds none of the money logic.
@@ -207,20 +216,22 @@ Logos **Storage/Codex** encrypted backup of the log is a later, module-side, off
 | **Merge & convergence** (union-by-id, HLC order, invariant) | **Done** — 200-trial property test + golden vectors |
 | **Crypto parity (TS ↔ C++)** | **Done — 5/5 checks** (`module/test/crypto_parity.cpp`) |
 | **Sync ingest parity (TS ↔ C++)** | **Done — 7/7 checks** (`module/test/sync_ingest.cpp`) |
-| **`delivery_module` transport (desktop)** | **Pending** — wire the C++ ingest path onto `delivery_module` subscribe/send |
-| **`liblogosdelivery` JNI (mobile)** | **Pending** — embed on Android, drive `SyncNode` from RN (bidirectional) |
+| **SDS Reliable Channels transport (desktop + hub)** | **Shipped + proven** — `channelCreate`/`channelSend`/`onChannelMessageReceived` over `delivery_module` (`KYM_USE_CHANNELS`); hub ↔ Basecamp live sync + offline catch-up verified. See decision #22. |
+| **`liblogosdelivery` JNI (mobile)** | **Shipped + proven end-to-end** — channels-enabled arm64 lib built from source; bidirectional sync verified on a real Pixel (hub→phone + phone→hub). The four required fixes: decision #23. |
 | **Set-reconciliation backfill (algorithm, TS)** | **Done** — `packages/sync/src/reconcile.mjs`, `reconcile.test.mjs` (6 tests, incl. 200-trial property) |
 | **Set-reconciliation (C++ mirror)** | **Done** — `module/src/kym_reconcile_std.hpp`, `reconcile_parity.cpp` (8/8): **byte-identical fingerprints + same diff as TS** (cross-language interop). Wired into the hub (`logFingerprint`). |
 | **Qt-free wire codec** (headless hub / core reconciler) | **Done** — `module/src/kym_wire_std.hpp`, `wire_std_parity.cpp` (34/34) decodes TS JSON + round-trips |
 | **Headless hub ingest path** (open→decode→dedup→fold) | **Done** — `module-hub/` builds headless; `hub_ingest.cpp` (10/10) |
 | **Two-instance convergence** (hub crypto+wire+reconcile+fold) | **Done — over a *simulated* transport** — `hub_sync.cpp` (16/16): two peers with divergent offline edits reconcile, exchange only the diff, converge to identical state + invariant + fixpoint. The Waku hop is stubbed by a byte pipe (real `delivery_module` unverified). |
-| **Headless hub Delivery transport** | **Code-complete, builds** — `module-hub` `onContextReady` → `onMessageReceived`/`createNode`/`subscribe`/`send` (std `LogosMap`/base64), EVENT + SYNC_REQ dispatch, naive re-serve backfill. Not yet run over a live `delivery_module`. |
+| **Headless hub Delivery transport** | **Shipped + proven** — `kym_core` under `logoscore` joins the household channel and two-way syncs a live Basecamp's edits over the fleet (systemd `--user` runner in `hub/`). |
 | **Delivery payload = base64/JSON** (hub↔desktop interop) | **Aligned + built** — core module gets the std delivery API (JSON payload); the Qt desktop backend now base64s too (`kym_wire_std.hpp::b64encode`), so both surfaces are wire-compatible by construction. Unverified on the wire. |
 | **KYM-SYNC v2 RBSR session over Delivery** | **Pending** — multi-round NEG_OPEN/NEG_MSG state machine on top of the working transport (naive re-serve works today) |
 | **Signed snapshot bootstrap** | **Pending** — cold-start devices load folded state + reconcile only the tail |
 | **Headless hub (core module under `logoscore`)** | **Loads headless — verified locally** — `module-hub/` runs under `logoscore` with `delivery_module` dependency-injected (`run-logoscore.sh`, 2026-07-18). Transport callback + `delivery_module` runtime bring-up still pending. |
 | **Topic rotation (epoch > 0)** | **Pending** — derivation supports it; not yet exercised |
 
-The transport-agnostic core and the cross-language wire/crypto/fold are proven; what remains is
-binding that core to the two real Delivery transports (the C++ `delivery_module` adapter and the
-mobile JNI bridge — plan.md Phases 1 and 3).
+The transport-agnostic core and the cross-language wire/crypto/fold are proven, **and both real
+Delivery transports are now bound and verified end-to-end** over SDS Reliable Channels: desktop ↔
+headless hub ↔ mobile all sync a shared household, live and after offline edits. What remains is a
+multi-round RBSR session over the channel (naive re-serve works today) and mobile re-offering old
+unsent events (decision #23).
