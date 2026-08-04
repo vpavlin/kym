@@ -51,8 +51,19 @@ const USE_CHANNELS = true;
 // contentTopic == the derived topic, senderId == this device) or, in raw mode, a
 // plain content-topic subscription.
 async function joinRoute(ctx: string, r: Route, deviceId: string): Promise<void> {
+  // Register the CONTENT topic on the node in BOTH modes. recv_service only emits
+  // MessageReceivedEvent for content topics in its subscribed set (isContentSubscribed,
+  // subscription_manager.nim) — and the ReliableChannel's ingress listener rides on
+  // that SAME MessageReceivedEvent. channelCreate builds the channel + its listener but
+  // does NOT subscribe, so without this the node drops every incoming message at the
+  // recv_service gate before the channel ever sees it (that was the `ours: 0` bug —
+  // relay received traffic, but the channel layer was never fed). Desktop kym_core
+  // gets this for free via its node's subscription path; the raw mobile FFI does not.
+  await LogosMessaging.subscribeContentTopic(ctx, r.topic);
+  // Then attach the SDS channel so incoming channel-framed messages get unwrapped into
+  // channel_message_received (the raw message_received still fires too, but its payload
+  // is SDS-framed and open() harmlessly rejects it).
   if (USE_CHANNELS) await LogosMessaging.channelCreate(ctx, r.topic, r.topic, deviceId);
-  else await LogosMessaging.subscribeContentTopic(ctx, r.topic);
 }
 
 // Publish sealed bytes (base64) on a budget's household. A channel send carries only
@@ -60,7 +71,14 @@ async function joinRoute(ctx: string, r: Route, deviceId: string): Promise<void>
 // contentTopic in the envelope.
 async function publishSealed(ctx: string, r: Route, sealedB64: string): Promise<void> {
   if (USE_CHANNELS) {
-    await LogosMessaging.channelSend(ctx, r.topic, JSON.stringify({ payload: sealedB64, ephemeral: false }));
+    // Match the desktop's (accidental but deployed) DOUBLE-base64 channel convention so
+    // desktop peers can decode us: kym_core hands the transport the base64 TEXT as bytes
+    // (bytesPayload) and delivery_module base64Encodes that again. channelSend's FFI
+    // base64-decodes `payload` once, so to put the base64-text bytes on the SDS wire we
+    // send base64(utf8Bytes(sealedB64)). The receive side mirrors this (payloadCandidates
+    // double-decodes). Raw send stays single-encoded — that path already interops.
+    const doubled = fromByteArray(utf8Bytes(sealedB64));
+    await LogosMessaging.channelSend(ctx, r.topic, JSON.stringify({ payload: doubled, ephemeral: false }));
   } else {
     await LogosMessaging.send(ctx, JSON.stringify({ contentTopic: r.topic, payload: sealedB64, ephemeral: false }));
   }
@@ -131,6 +149,15 @@ let didSetup = false;   // LogosMessaging.setup() is process-wide — run it onl
 // (no peer on our topic, or the mesh isn't delivering). rxSeen > 0 but rxOpened 0 ⇒
 // traffic is there but not ours (wrong key/topic).
 let rxSeen = 0, rxOpened = 0, txSent = 0, rxRaw = 0, rxSample = "";
+// Diagnostic breakdown by FFI eventType: how many channel_message_received (the
+// UNWRAPPED SDS payload we can open) vs raw message_received (SDS-framed, won't open)
+// vs message_error (SDS/decrypt failures, with the last error text). This is what
+// tells channel-not-firing from SDS-reassembly-erroring apart.
+let dChan = 0, dMsg = 0, dErr = 0, dErrText = "";
+// First channel_message_received forensics: senderId (self-echo vs hub), payload
+// shape, candidate count, and the open() outcome (OK / the throw / nomatch). This is
+// what tells "unwrapped fine but won't decrypt" (ours:0 with chan>0) apart.
+let dInfo = "";
 export function getRx(): { seen: number; opened: number; sent: number; raw: number; sample: string } {
   return { seen: rxSeen, opened: rxOpened, sent: txSent, raw: rxRaw, sample: rxSample };
 }
@@ -214,18 +241,17 @@ export async function ensureNode(onStatus?: (s: string) => void): Promise<string
     // Re-subscribe periodically so a new budget's topic (added via refreshRoutes)
     // and any dropped subscription self-heal. Idempotent.
     if (renewTimer) clearInterval(renewTimer);
-    // Raw content-topic subscriptions lease-expire on the fleet, so renew them.
-    // Reliable channels persist their own SDS state (re-creating could reset it), so
-    // there's nothing to renew in channel mode.
-    if (!USE_CHANNELS) {
-      renewTimer = setInterval(() => {
-        for (const r of routes) {
-          LogosMessaging.subscribeContentTopic(n.ctx, r.topic).catch(() => {
-            /* transient — the next tick retries; node stays up */
-          });
-        }
-      }, FILTER_RENEW_MS);
-    }
+    // Content-topic subscriptions lease-expire on the fleet, so renew them — in BOTH
+    // modes now, since channel mode also depends on the content-topic subscription to
+    // feed recv_service (see joinRoute). Renew ONLY the subscription, never channelCreate:
+    // re-creating the channel is what could reset persisted SDS state.
+    renewTimer = setInterval(() => {
+      for (const r of routes) {
+        LogosMessaging.subscribeContentTopic(n.ctx, r.topic).catch(() => {
+          /* transient — the next tick retries; node stays up */
+        });
+      }
+    }, FILTER_RENEW_MS);
     onStatus?.("Connected");
     return n;
   })();
@@ -318,7 +344,16 @@ function payloadCandidates(payload: any): Uint8Array[] {
     try { out.push(toByteArray(s)); } catch { /* not base64 text */ }
     out.push(Uint8Array.from(payload.map((b: number) => b & 0xff)));
   } else if (typeof payload === "string") {
-    try { out.push(toByteArray(payload)); } catch { /* not base64 */ }
+    try {
+      const once = toByteArray(payload);
+      out.push(once); // single-decoded: a peer that sent the sealed bytes directly
+      // DOUBLE-decode: the desktop channel path base64s an already-base64 payload
+      // (kym_core bytesPayload wraps the base64 TEXT as bytes, then delivery_module
+      // base64Encodes again), so channel_message_received.payload decodes once to the
+      // ASCII of a base64 string — decode that string too to reach the sealed bytes.
+      // (The byte-array/raw path already covers this via toByteArray(fromCharCode…).)
+      try { out.push(toByteArray(utf8Decode(once))); } catch { /* not double-encoded */ }
+    } catch { /* not base64 */ }
   }
   return out;
 }
@@ -354,7 +389,21 @@ export function startReceiving(
   if (!emitter) emitter = new NativeEventEmitter(LogosMessaging);
   const sub = emitter.addListener("logosMessage", (evt: { wakuPtr?: string; event?: string }) => {
     rxRaw++; // the native lib fired the callback AT ALL (relay receive works if this climbs)
-    if (!rxSample && evt?.event) rxSample = String(evt.event).slice(0, 160);
+    // Tally by eventType BEFORE any node/decrypt gating, so the sample reflects every
+    // event that arrived. chan>0 = the SDS channel is unwrapping (receive path healthy);
+    // chan==0 while msg>0 = messages arrive but the channel layer never fires; err>0 =
+    // the channel fired but SDS/decrypt rejected it (lastErr says which).
+    try {
+      const s0 = String(evt?.event || "");
+      if (s0.indexOf("channel_message_received") >= 0) dChan++;
+      else if (s0.indexOf("message_received") >= 0) dMsg++;
+      else if (s0.indexOf("message_error") >= 0 || s0.indexOf("channel_message_error") >= 0) {
+        dErr++;
+        const em = JSON.parse(s0);
+        dErrText = String(em.error || em.message || "").slice(0, 90);
+      }
+      rxSample = `chan:${dChan} msg:${dMsg} err:${dErr} | ${dInfo || "lastErr[" + dErrText + "]"}`;
+    } catch { /* keep prior sample */ }
     if (!node) return; // node not up yet — nothing to decrypt against
     try {
       const raw = evt?.event;
@@ -368,18 +417,23 @@ export function startReceiving(
       const payload = wm && wm.payload != null ? wm.payload : m.payload;
       if (payload == null) return;
       rxSeen++; // a WakuMessage with a payload reached us over the mesh
+      const isChan = m && m.eventType === "channel_message_received";
       // Build candidate sealed-bytes (base64-string bytes OR decoded bytes — the
       // native side may deliver either). Route by decryption: for each candidate,
       // try each budget's key. open() is authenticated, so only the right one wins.
       const candidates = payloadCandidates(payload);
+      let openErr = "";
+      let matched = false;
       for (const sealed of candidates) {
         for (const r of routes) {
           let plaintext: Uint8Array;
           try {
             plaintext = open(r.id, sealed, r.topic);
-          } catch {
+          } catch (e) {
+            openErr = String((e && (e as any).message) || e).slice(0, 40);
             continue; // not this candidate/budget
           }
+          matched = true;
           rxOpened++; // decrypted with one of our budget keys → it's ours
           const env = JSON.parse(utf8Decode(plaintext));
           if (env && env.type === "EVENT" && env.event) {
@@ -389,6 +443,17 @@ export function startReceiving(
           }
           return; // matched — done
         }
+      }
+      // First channel event that DIDN'T open: record why (senderId self-vs-hub, payload
+      // shape, how many candidates we tried, and the last open() throw).
+      if (isChan && !matched && dInfo === "") {
+        const pk =
+          typeof payload === "string"
+            ? "b64len" + payload.length
+            : Array.isArray(payload)
+              ? "arr" + payload.length
+              : typeof payload;
+        dInfo = `sid=${String(m.senderId || "?").slice(0, 8)} pl=${pk} cand=${candidates.length} openErr[${openErr || "none"}]`;
       }
     } catch {
       // Drop anything we can't decrypt/parse. Safety net for foreign traffic and

@@ -11,7 +11,12 @@ BT=$(ls -d "$ANDROID_HOME"/build-tools/*/ 2>/dev/null | sort -V | tail -1)
 export PATH="$JAVA_HOME/bin:${BT}:$ANDROID_HOME/platform-tools:$PATH"
 ROOT="$(cd "$(dirname "$0")/.."; pwd)"
 
-FDROID_HOME="${KYM_FDROID_HOME:-$HOME/kym-fdroid}"
+# The SERVED repo (what the phone's F-Droid actually fetches) is ~/fdroid, reached
+# via ~/vpavlin-home/fdroid -> ~/fdroid (vpavlin-home/serve.py). It carries the
+# metadata/ (co.logos.kym.yml) that `fdroid update` needs to index the APK, and the
+# repo fingerprint the phone already trusts. ~/kym-fdroid is a stale second repo with
+# EMPTY metadata — publishing there silently produced an empty index. Default here.
+FDROID_HOME="${KYM_FDROID_HOME:-$HOME/fdroid}"
 FDROID="${FDROID_BIN:-$HOME/fdroid-venv/bin/fdroid}"
 APK="$ROOT/dist/lan/kym-arm64.apk"
 

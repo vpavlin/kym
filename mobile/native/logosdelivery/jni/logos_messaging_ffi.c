@@ -268,7 +268,10 @@ jobject Java_com_receiverandroid_LogosMessagingModule_wakuVersion(JNIEnv *env, j
 jobject Java_com_receiverandroid_LogosMessagingModule_wakuStop(JNIEnv *env, jobject thiz,
                                             jlong wakuPtr) {
   cb_result *result = NULL;
-  waku_stop((void *)wakuPtr, on_response, &result);
+  // Use the unified high-level lifecycle (create/start/stop/destroy) — the raw
+  // waku_stop/waku_destroy kernel symbols are not exported by the current
+  // liblogosdelivery build; logosdelivery_stop_node/destroy share the same ABI.
+  logosdelivery_stop_node((void *)wakuPtr, on_response, &result);
   jobject response = to_jni_result(env, result);
   free_cb_result(result);
   return response;
@@ -277,7 +280,7 @@ jobject Java_com_receiverandroid_LogosMessagingModule_wakuStop(JNIEnv *env, jobj
 jobject Java_com_receiverandroid_LogosMessagingModule_wakuDestroy(JNIEnv *env, jobject thiz,
                                                jlong wakuPtr) {
   cb_result *result = NULL;
-  waku_destroy((void *)wakuPtr, on_response, &result);
+  logosdelivery_destroy((void *)wakuPtr, on_response, &result);
   jobject response = to_jni_result(env, result);
   free_cb_result(result);
   return response;

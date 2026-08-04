@@ -131,6 +131,14 @@ class LogosMessagingModule(reactContext: ReactApplicationContext) : ReactContext
   // Publish on a CONTENT topic via the high-level logosdelivery_send. messageJson
   // is the send envelope: { "contentTopic", "payload":"<base64>", "ephemeral" }.
   external fun wakuSend(ctx: Long, messageJson: String): WakuResult
+  // Reliable Channel (SDS) create/send/close. channelId == contentTopic == the budget's
+  // derived topic; senderId == this device. NOTE: channelCreate does NOT subscribe the
+  // content topic — delivery.ts pairs it with subscribeContentTopic so recv_service
+  // actually feeds the channel's ingress listener. Bound to the wakuChannel* JNI in
+  // logos_messaging_ffi.c (liblogos_messaging_jni.so).
+  external fun wakuChannelCreate(ctx: Long, channelId: String, contentTopic: String, senderId: String): WakuResult
+  external fun wakuChannelSend(ctx: Long, channelId: String, messageJson: String): WakuResult
+  external fun wakuChannelClose(ctx: Long, channelId: String): WakuResult
   // Store (history) query — pull half of catch-up. jsonQuery is an nwaku
   // StoreQueryRequest; peerAddr is the fleet store node to ask. Returns the
   // response JSON (messages[] + paginationCursor) for JS to decrypt.
@@ -309,6 +317,42 @@ class LogosMessagingModule(reactContext: ReactApplicationContext) : ReactContext
     val response = wakuSend(wakuPtr, messageJson)
     if (response.error) {
       promise.reject("waku_send", response.message)
+    } else {
+      promise.resolve(null)
+    }
+  }
+
+  // Reliable Channel API bridge. channelCreate builds the SDS channel + its ingress
+  // listener; channelSend publishes a channel-framed message (messageJson =
+  // {"payload":"<base64>","ephemeral":<bool>}). channelId == the budget's derived topic.
+  @ReactMethod
+  fun channelCreate(ctx: String, channelId: String, contentTopic: String, senderId: String, promise: Promise) {
+    val wakuPtr = BigInteger(ctx).toLong()
+    val response = wakuChannelCreate(wakuPtr, channelId, contentTopic, senderId)
+    if (response.error) {
+      promise.reject("logosdelivery_channel_create", response.message)
+    } else {
+      promise.resolve(response.message)
+    }
+  }
+
+  @ReactMethod
+  fun channelSend(ctx: String, channelId: String, messageJson: String, promise: Promise) {
+    val wakuPtr = BigInteger(ctx).toLong()
+    val response = wakuChannelSend(wakuPtr, channelId, messageJson)
+    if (response.error) {
+      promise.reject("logosdelivery_channel_send", response.message)
+    } else {
+      promise.resolve(response.message)
+    }
+  }
+
+  @ReactMethod
+  fun channelClose(ctx: String, channelId: String, promise: Promise) {
+    val wakuPtr = BigInteger(ctx).toLong()
+    val response = wakuChannelClose(wakuPtr, channelId)
+    if (response.error) {
+      promise.reject("logosdelivery_channel_close", response.message)
     } else {
       promise.resolve(null)
     }

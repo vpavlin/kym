@@ -1,11 +1,12 @@
 {
   "name": "kym",
   "display_name": "KYM - Know Your Money",
-  "version": "0.6.5",
+  "version": "0.6.8",
   "type": "ui_qml",
   "category": "finance",
   "description": "Local-first zero-based budget. Envelope categories, a monthly grid, accounts and credit-card handling - all computed by a conflict-free, append-only event-log engine (the same engine the mobile app and peers fold). Pure-QML view over the kym_core module.",
   "view": "Main.qml",
+  "icon": "icon.png",
   "dependencies": [
     "kym_core"
   ],
