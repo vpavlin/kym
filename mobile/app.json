@@ -2,17 +2,28 @@
   "expo": {
     "name": "KYM",
     "slug": "kym",
-    "version": "0.13.12",
+    "version": "0.14.14",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "scheme": "kym",
+    "icon": "./assets/icon.png",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#2e333a"
+    },
     "experiments": {
       "onDemandFilesystem": false
     },
     "android": {
       "package": "co.logos.kym",
-      "versionCode": 24,
-      "predictiveBackGestureEnabled": false
+      "versionCode": 40,
+      "predictiveBackGestureEnabled": false,
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundImage": "./assets/adaptive-bg.png",
+        "backgroundColor": "#2e333a"
+      }
     },
     "ios": {
       "supportsTablet": true,
