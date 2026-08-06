@@ -551,7 +551,11 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
         txnId: newTxnId(),
         accountId: input.accountId,
         amount,
-        date: input.date ?? Date.now(),
+        // date MUST be an ISO STRING — kym_core splits payloads e.s(strings)/e.n(numbers)
+        // and the fold reads e.s.at("date") + derives the category month via monthOf(date)
+        // = date.substr(0,7). A numeric Date.now() lands in e.n → no date AND no category
+        // activity. See memory kym-event-payload-field-types.
+        date: new Date(input.date ?? Date.now()).toISOString(),
         categoryId: input.categoryId ?? null,
         cleared: input.cleared ?? "uncleared",
         approved: true,
@@ -570,7 +574,7 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
         txnId: newTxnId(),
         accountId,
         amount: Math.abs(amountMilli), // inflow is positive, always
-        date: opts?.date ?? Date.now(),
+        date: new Date(opts?.date ?? Date.now()).toISOString(), // ISO string — see addExpense
         categoryId: RTA_INFLOW,
         cleared: "uncleared",
         approved: true,
@@ -677,7 +681,7 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
         accountType,
         onBudget,
         startingBalance: startingBalanceMilli,
-        startDate: Date.now(),
+        startDate: new Date().toISOString().slice(0, 10), // YYYY-MM-DD STRING (desktop writes e.s["startDate"]=ymd())
         currency: ccy,
       });
       await commit([event]);
