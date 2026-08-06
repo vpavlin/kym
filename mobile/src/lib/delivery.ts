@@ -1,173 +1,40 @@
-// Native Logos Delivery (embedded Waku node) bridge — the phone runs its OWN
-// liblogosdelivery.so node via the LogosMessaging JNI module, publishes household
-// budget events on the pair's derived content topic, and RECEIVES the events the
-// Basecamp (desktop) side publishes on the same topic. Two-way sync.
-//
-// The native module is arm64-only (no x86_64 build), so on the emulator
-// `deliveryAvailable()` is true (the JS module is registered) but `ensureNode()`
-// rejects when setup() can't load the .so — callers surface that as "offline".
-//
-// Adapted from Perun's mobile/src/lib/delivery.ts. The one net-new piece is
-// startReceiving(): Perun wired send + a bare onMessage passthrough but never
-// decoded/decrypted the inbound FFI events. That decode lives here.
-import { NativeModules, NativeEventEmitter } from "react-native";
-import { fromByteArray, toByteArray } from "base64-js";
+// KYM's thin adapter over the SHARED logos-transport (mobile/src/lib/logos-transport.ts).
+// The transport moves OPAQUE sealed bytes on content topics and is byte-for-byte the
+// same wire KYM has always used (it was extracted FROM this file) — so this swap keeps
+// KYM's proven sync. This adapter supplies the ONLY app-specific pieces:
+//   • ROUTES — one household per budget: { budgetId, Identity, derived topic }
+//   • CRYPTO — seal/open with the budget's key (identity.ts), AAD = topic
+//   • ENVELOPE dispatch — EVENT → onEvent(budgetId,event), SYNC_REQ → onSyncReq(...)
+// If sync ever breaks again, the bug is in logos-transport (shared, fix once) or here
+// (routes/crypto/envelope) — never a re-implemented wire path.
 import { loadIdentity } from "./identityStore";
 import { loadRegistry } from "./budgets";
 import { seal, open, topicFor, Identity } from "./identity";
 import type { KymEvent } from "./engine";
 import { getDeviceId } from "./device";
-
-const { LogosMessaging } = NativeModules as { LogosMessaging: any };
-
-// Time to let the freshly-started node dial logos.dev + form the pubsub mesh
-// before the first publish. Only paid once, on initial node bring-up.
-const SETTLE_MS = 10000;
-
-// logos.dev bootstrap peers — copied verbatim from Perun's delivery.ts; the same
-// set the desktop Basecamp delivery module dials.
-const BOOTSTRAP = [
-  "/dns4/delivery-01.do-ams3.logos.dev.status.im/tcp/30303/p2p/16Uiu2HAmTUbnxLGT9JvV6mu9oPyDjqHK4Phs1VDJNUgESgNSkuby",
-  "/dns4/delivery-02.do-ams3.logos.dev.status.im/tcp/30303/p2p/16Uiu2HAmMK7PYygBtKUQ8EHp7EfaD3bCEsJrkFooK8RQ2PVpJprH",
-  "/dns4/delivery-01.gc-us-central1-a.logos.dev.status.im/tcp/30303/p2p/16Uiu2HAm4S1JYkuzDKLKQvwgAhZKs9otxXqt8SCGtB4hoJP1S397",
-  "/dns4/delivery-02.gc-us-central1-a.logos.dev.status.im/tcp/30303/p2p/16Uiu2HAm8Y9kgBNtjxvCnf1X6gnZJW5EGE4UwwCL3CCm55TwqBiH",
-  "/dns4/delivery-01.ac-cn-hongkong-c.logos.dev.status.im/tcp/30303/p2p/16Uiu2HAm8YokiNun9BkeA1ZRmhLbtNUvcwRr64F69tYj9fkGyuEP",
-  "/dns4/delivery-02.ac-cn-hongkong-c.logos.dev.status.im/tcp/30303/p2p/16Uiu2HAkvwhGHKNry6LACrB8TmEFoCJKEX29XR5dDUzk3UT3UNSE",
-];
+import { utf8Bytes, utf8Decode } from "./utf8";
+import * as transport from "./logos-transport";
 
 /** True if the native module is present in this build at all. */
 export function deliveryAvailable(): boolean {
-  return !!LogosMessaging;
+  return transport.deliveryAvailable();
 }
 
-// Sync transport: SDS Reliable Channels — matches the desktop hub/Basecamp which
-// now run with KYM_USE_CHANNELS. Over a channel the wire payload is the SAME sealed
-// envelope (received messages arrive on the same event stream and decrypt exactly
-// the same), so ONLY join + send differ; the raw subscribe/send path can't decode
-// the SDS channel framing. Flip to false only to talk to a legacy raw-relay peer.
-const USE_CHANNELS = true;
-
-// Join a budget's household on the wire: a reliable channel (channelId ==
-// contentTopic == the derived topic, senderId == this device) or, in raw mode, a
-// plain content-topic subscription.
-async function joinRoute(ctx: string, r: Route, deviceId: string): Promise<void> {
-  // Register the CONTENT topic on the node in BOTH modes. recv_service only emits
-  // MessageReceivedEvent for content topics in its subscribed set (isContentSubscribed,
-  // subscription_manager.nim) — and the ReliableChannel's ingress listener rides on
-  // that SAME MessageReceivedEvent. channelCreate builds the channel + its listener but
-  // does NOT subscribe, so without this the node drops every incoming message at the
-  // recv_service gate before the channel ever sees it (that was the `ours: 0` bug —
-  // relay received traffic, but the channel layer was never fed). Desktop kym_core
-  // gets this for free via its node's subscription path; the raw mobile FFI does not.
-  await LogosMessaging.subscribeContentTopic(ctx, r.topic);
-  // Then attach the SDS channel so incoming channel-framed messages get unwrapped into
-  // channel_message_received (the raw message_received still fires too, but its payload
-  // is SDS-framed and open() harmlessly rejects it).
-  if (USE_CHANNELS) await LogosMessaging.channelCreate(ctx, r.topic, r.topic, deviceId);
-}
-
-// Publish sealed bytes (base64) on a budget's household. A channel send carries only
-// { payload, ephemeral } — the channel already knows its topic; raw send needs the
-// contentTopic in the envelope.
-async function publishSealed(ctx: string, r: Route, sealedB64: string): Promise<void> {
-  if (USE_CHANNELS) {
-    // Match the desktop's (accidental but deployed) DOUBLE-base64 channel convention so
-    // desktop peers can decode us: kym_core hands the transport the base64 TEXT as bytes
-    // (bytesPayload) and delivery_module base64Encodes that again. channelSend's FFI
-    // base64-decodes `payload` once, so to put the base64-text bytes on the SDS wire we
-    // send base64(utf8Bytes(sealedB64)). The receive side mirrors this (payloadCandidates
-    // double-decodes). Raw send stays single-encoded — that path already interops.
-    const doubled = fromByteArray(utf8Bytes(sealedB64));
-    await LogosMessaging.channelSend(ctx, r.topic, JSON.stringify({ payload: doubled, ephemeral: false }));
-  } else {
-    await LogosMessaging.send(ctx, JSON.stringify({ contentTopic: r.topic, payload: sealedB64, ephemeral: false }));
-  }
-}
-
-// UTF-8 <-> bytes, hand-rolled: no TextEncoder/TextDecoder guaranteed on Hermes,
-// and no escape/unescape (legacy Annex-B globals). Matches identity.ts's `enc`.
-function utf8Bytes(s: string): Uint8Array {
-  const out: number[] = [];
-  for (let i = 0; i < s.length; i++) {
-    const c = s.charCodeAt(i);
-    if (c < 0x80) {
-      out.push(c);
-    } else if (c < 0x800) {
-      out.push(0xc0 | (c >> 6), 0x80 | (c & 0x3f));
-    } else if (c >= 0xd800 && c <= 0xdbff && i + 1 < s.length) {
-      const c2 = s.charCodeAt(i + 1);
-      if (c2 >= 0xdc00 && c2 <= 0xdfff) {
-        const cp = 0x10000 + ((c - 0xd800) << 10) + (c2 - 0xdc00);
-        out.push(0xf0 | (cp >> 18), 0x80 | ((cp >> 12) & 0x3f), 0x80 | ((cp >> 6) & 0x3f), 0x80 | (cp & 0x3f));
-        i++;
-      } else {
-        out.push(0xe0 | (c >> 12), 0x80 | ((c >> 6) & 0x3f), 0x80 | (c & 0x3f));
-      }
-    } else {
-      out.push(0xe0 | (c >> 12), 0x80 | ((c >> 6) & 0x3f), 0x80 | (c & 0x3f));
-    }
-  }
-  return new Uint8Array(out);
-}
-
-function utf8Decode(bytes: Uint8Array): string {
-  let s = "";
-  let i = 0;
-  while (i < bytes.length) {
-    const b0 = bytes[i++];
-    if (b0 < 0x80) {
-      s += String.fromCharCode(b0);
-    } else if (b0 >= 0xc0 && b0 < 0xe0) {
-      const b1 = bytes[i++] & 0x3f;
-      s += String.fromCharCode(((b0 & 0x1f) << 6) | b1);
-    } else if (b0 >= 0xe0 && b0 < 0xf0) {
-      const b1 = bytes[i++] & 0x3f;
-      const b2 = bytes[i++] & 0x3f;
-      s += String.fromCharCode(((b0 & 0x0f) << 12) | (b1 << 6) | b2);
-    } else {
-      const b1 = bytes[i++] & 0x3f;
-      const b2 = bytes[i++] & 0x3f;
-      const b3 = bytes[i++] & 0x3f;
-      let cp = ((b0 & 0x07) << 18) | (b1 << 12) | (b2 << 6) | b3;
-      cp -= 0x10000;
-      s += String.fromCharCode(0xd800 + (cp >> 10), 0xdc00 + (cp & 0x3ff));
-    }
-  }
-  return s;
-}
-
-// ONE Waku light node, but N routes — one per budget/household (each its own key +
-// derived topic). We subscribe every budget's topic and route an incoming message
-// to whichever budget's key authenticates it (open() throws on the wrong key). This
-// mirrors kym_core: bootstrapDelivery subscribes all topics; ingestRaw routes by
-// contentTopic → budgetForTopic. Sends seal with the target budget's key/topic.
+// ONE Waku node, N routes — one per budget/household (each its own key + derived
+// topic). Incoming messages route to whichever budget's key authenticates them
+// (open() throws on the wrong key). Mirrors kym_core: subscribe all topics, route by
+// contentTopic → budget. Sends seal with the target budget's key/topic.
 interface Route { budgetId: string; id: Identity; topic: string }
-let node: { ctx: string } | null = null;
-let didSetup = false;   // LogosMessaging.setup() is process-wide — run it only once
-// Receive diagnostics: rxSeen = payloads that reached us over the mesh; rxOpened =
-// those that decrypted with one of our budget keys. rxSeen 0 ⇒ nothing is arriving
-// (no peer on our topic, or the mesh isn't delivering). rxSeen > 0 but rxOpened 0 ⇒
-// traffic is there but not ours (wrong key/topic).
-let rxSeen = 0, rxOpened = 0, txSent = 0, rxRaw = 0, rxSample = "";
-// Diagnostic breakdown by FFI eventType: how many channel_message_received (the
-// UNWRAPPED SDS payload we can open) vs raw message_received (SDS-framed, won't open)
-// vs message_error (SDS/decrypt failures, with the last error text). This is what
-// tells channel-not-firing from SDS-reassembly-erroring apart.
-let dChan = 0, dMsg = 0, dErr = 0, dErrText = "";
-// First channel_message_received forensics: senderId (self-echo vs hub), payload
-// shape, candidate count, and the open() outcome (OK / the throw / nomatch). This is
-// what tells "unwrapped fine but won't decrypt" (ours:0 with chan>0) apart.
-let dInfo = "";
-export function getRx(): { seen: number; opened: number; sent: number; raw: number; sample: string } {
-  return { seen: rxSeen, opened: rxOpened, sent: txSent, raw: rxRaw, sample: rxSample };
-}
-// Last store-query outcome, surfaced in the Sync card so the first on-device run
-// tells us whether the fleet actually retains our shard (the make-or-break unknown).
-let storeInfo = "store: not run";
-export function getStoreInfo(): string { return storeInfo; }
 let routes: Route[] = [];
-let starting: Promise<{ ctx: string }> | null = null;
-let emitter: NativeEventEmitter | null = null;
+
+// App callbacks, set by startReceiving(); the transport's single listener calls
+// adapterReceive() which dispatches through these. Set independently of node bring-up,
+// so startReceiving() and ensureNode() may be called in either order.
+let onEventCb: ((budgetId: string, event: KymEvent) => void) | null = null;
+let onSyncReqCb: ((budgetId: string, from: string) => void) | null = null;
+
+/** Error thrown when a sync is attempted before pairing. Surfaced to the user. */
+export const NOT_PAIRED = "NOT_PAIRED: pair this device with your household first";
 
 // Build a route per budget that HAS a household secret (paired or self-hosted).
 async function buildRoutes(): Promise<Route[]> {
@@ -179,425 +46,158 @@ async function buildRoutes(): Promise<Route[]> {
   }
   return out;
 }
-// Filter subscriptions are leased by the service node and expire
-// (filterSubscriptionTimeout). Re-subscribe periodically or the phone silently
-// stops receiving. Idempotent: re-subscribing the same content topic just
-// refreshes the lease. Cleared in stopNode.
-let renewTimer: ReturnType<typeof setInterval> | null = null;
-const FILTER_RENEW_MS = 60000;
 
-/** Error thrown when a sync is attempted before pairing. Surfaced to the user. */
-export const NOT_PAIRED = "NOT_PAIRED: pair this device with your household first";
-
-/**
- * Bring the node up once (idempotent): load identity (must be paired) → setup →
- * new(logos.dev) → start → relaySubscribe(derived topic) → settle. Concurrent
- * callers share the same in-flight startup. Rejects with NOT_PAIRED if unpaired.
- */
-export async function ensureNode(onStatus?: (s: string) => void): Promise<string> {
-  if (!LogosMessaging) throw new Error("Logos Delivery native module not present in this build");
-  if (node) return node.ctx;
-  if (starting) return (await starting).ctx;
-  starting = (async () => {
-    routes = await buildRoutes();
-    if (routes.length === 0) throw new Error(NOT_PAIRED);
-    onStatus?.("Starting node…");
-    // setup() initialises the native lib process-wide; call it ONCE. Re-running it
-    // on every reconnect (e.g. a retry) can crash the native layer.
-    if (!didSetup) { await LogosMessaging.setup(); didSetup = true; }
-    // RELAY node. This is the config that worked before we detoured through a Waku
-    // light client (Edge + filter), which the fleet never reliably served ("filter
-    // 0"). As a RELAY node we connect to ALL bootstrap peers, discover more, join
-    // the gossip mesh, and receive by mesh membership — no service node has to
-    // accept a filter lease. Minimal on purpose: the light-client fields
-    // (filter/lightpush/store + pinned service nodes) are what made waku_new reject
-    // the config → "offline". Don't add them back.
-    // EXACTLY the config the Perun mobile app uses to talk to its Basecamp module
-    // (same fleet, same native liblogosdelivery). KYM's native + subscribe path is
-    // byte-identical to Perun's, so this is the proven-working setup. No clusterId /
-    // shard pinning — the preset + auto-sharding handle it.
-    const config = {
-      mode: "Core",
-      preset: "logos.dev",
-      relay: true,
-      entryNodes: BOOTSTRAP,
-    };
-    const c: string = await LogosMessaging.new(config);
-    onStatus?.("Joining mesh…");
-    await LogosMessaging.start(c);
-    // Subscribe EVERY budget's topic on the relay mesh (pubsub subscribe, not the
-    // Subscribe by CONTENT topic — subscribeContentTopic AUTO-SHARDS it to the real
-    // pubsub topic (/waku/2/rs/<cluster>/<shard>), the same one send() publishes to.
-    // relaySubscribe() takes a RAW pubsub topic; handing it a content topic
-    // subscribes to a non-existent shard and the node receives NOTHING (that was the
-    // sync bug — see logos_messaging_ffi.c). With relay:true this joins the gossip
-    // mesh for that shard, so we receive relayed messages.
-    const deviceId = await getDeviceId();
-    for (const r of routes) await joinRoute(c, r, deviceId);
-    onStatus?.("Forming mesh…");
-    await new Promise((r) => setTimeout(r, SETTLE_MS));
-    const n = { ctx: c };
-    node = n;
-    // Re-subscribe periodically so a new budget's topic (added via refreshRoutes)
-    // and any dropped subscription self-heal. Idempotent.
-    if (renewTimer) clearInterval(renewTimer);
-    // Content-topic subscriptions lease-expire on the fleet, so renew them — in BOTH
-    // modes now, since channel mode also depends on the content-topic subscription to
-    // feed recv_service (see joinRoute). Renew ONLY the subscription, never channelCreate:
-    // re-creating the channel is what could reset persisted SDS state.
-    renewTimer = setInterval(() => {
-      for (const r of routes) {
-        LogosMessaging.subscribeContentTopic(n.ctx, r.topic).catch(() => {
-          /* transient — the next tick retries; node stays up */
-        });
-      }
-    }, FILTER_RENEW_MS);
-    onStatus?.("Connected");
-    return n;
-  })();
-  try {
-    return (await starting).ctx;
-  } catch (e) {
-    node = null;
-    throw e;
-  } finally {
-    starting = null;
+// Transport hands us the candidate sealed-byte arrays for a content topic; open one
+// with the matching budget's key and dispatch. Return true iff a candidate opened
+// (so the transport tallies rxOpened vs rxOpenFail). open() is authenticated, so only
+// the right key/candidate wins — trying the topic's own route first, then all as a
+// defensive fallback, matches the old route-by-decryption behaviour.
+function adapterReceive(topic: string, candidates: Uint8Array[]): boolean {
+  const primary = routes.find((x) => x.topic === topic);
+  const tryRoutes = primary ? [primary, ...routes.filter((r) => r !== primary)] : routes;
+  for (const cand of candidates) {
+    for (const r of tryRoutes) {
+      let plaintext: Uint8Array;
+      try { plaintext = open(r.id, cand, r.topic); } catch { continue; } // wrong key/candidate
+      try {
+        const env = JSON.parse(utf8Decode(plaintext));
+        if (env && env.type === "EVENT" && env.event) {
+          onEventCb?.(r.budgetId, env.event as KymEvent);
+        } else if (env && env.type === "SYNC_REQ") {
+          onSyncReqCb?.(r.budgetId, typeof env.from === "string" ? env.from : "");
+        }
+      } catch { /* opened but not a valid envelope */ }
+      return true;
+    }
   }
+  return false;
 }
 
 /**
- * Publish one KYM event on the pair's derived topic. The wire envelope
- * {v:1,type:"EVENT",event} (matches packages/sync/src/wire.mjs) is sealed
- * (ChaCha20-Poly1305, AAD=topic) with the household key, base64'd, and handed to
- * liblogosdelivery as {contentTopic, payload, ephemeral}. No pairing → no send.
+ * Bring the node up once (idempotent): build routes (must be paired) → start the
+ * shared transport on every budget's topic. Concurrent callers share the transport's
+ * in-flight startup. Rejects with NOT_PAIRED if unpaired. Returns the node ctx.
+ */
+export async function ensureNode(onStatus?: (s: string) => void): Promise<string> {
+  if (!transport.deliveryAvailable()) throw new Error("Logos Delivery native module not present in this build");
+  if (transport.getCtx()) return transport.getCtx(); // already up
+  routes = await buildRoutes();
+  if (routes.length === 0) throw new Error(NOT_PAIRED);
+  const deviceId = await getDeviceId();
+  await transport.start({
+    deviceId,
+    topics: routes.map((r) => r.topic),
+    onStatus,
+    onReceive: adapterReceive,
+  });
+  return transport.getCtx();
+}
+
+/**
+ * Publish one KYM event on the budget's household topic. Wire envelope
+ * {v:1,type:"EVENT",event} is sealed (ChaCha20-Poly1305, AAD=topic) with the
+ * household key; the transport does the double-base64 channel framing. No key for
+ * this budget on this device → nothing to send.
  */
 export async function sendEnvelope(event: KymEvent, budgetId: string): Promise<void> {
   await ensureNode();
   const r = routes.find((x) => x.budgetId === budgetId);
-  if (!r) return; // this budget has no household key on this device — nothing to send
+  if (!r) return;
   const envelope = { v: 1, type: "EVENT", event };
   const sealed = seal(r.id, utf8Bytes(JSON.stringify(envelope)), r.topic);
-  await publishSealed(node!.ctx, r, fromByteArray(sealed));
-  txSent++; // published to the fleet (channel/relay)
+  await transport.publishSealed(r.topic, sealed);
 }
 
 /**
- * Re-derive the routes and subscribe any newly-added budget's topic on the live
- * node (after creating or pairing a budget) — so a new household starts syncing
- * without a full node restart. No-op if the node isn't up yet (ensureNode will
- * build fresh routes when it starts).
+ * Re-derive routes and join any newly-added budget's topic on the live node (after
+ * creating or pairing a budget) — no full restart. No-op if the node isn't up yet
+ * (ensureNode builds fresh routes when it starts).
  */
 export async function refreshRoutes(): Promise<void> {
-  if (!node) return;
+  if (!transport.getCtx()) return;
   routes = await buildRoutes();
-  const deviceId = await getDeviceId();
-  for (const r of routes) await joinRoute(node.ctx, r, deviceId).catch(() => {});
+  await transport.join(routes.map((r) => r.topic));
 }
 
 /**
- * Ask the household to re-serve everything we're missing (the pull half of
- * sync). Mirrors KymCoreImpl::sendSyncReq: the envelope is
- * {v:1,type:"SYNC_REQ",from:<deviceId>} sealed with the household key, AAD=topic.
- * Peers answer by re-sending their whole log; ingest dedups by event id, so
- * asking repeatedly is harmless. `from` lets peers skip their own request.
- *
- * liblogosdelivery exposes no Store, so this request/re-serve pair is the ONLY
- * way a device gets state created before it joined.
+ * Ask each household to re-serve everything we're missing (pull half of sync).
+ * Envelope {v:1,type:"SYNC_REQ",from:<deviceId>} sealed per budget. Peers re-send
+ * their whole log; ingest dedups by event id, so asking repeatedly is harmless.
  */
 export async function sendSyncReq(deviceId: string): Promise<void> {
   await ensureNode();
-  // Ask on EVERY budget's topic — each household re-serves its own log.
   for (const r of routes) {
     const envelope = { v: 1, type: "SYNC_REQ", from: deviceId };
     const sealed = seal(r.id, utf8Bytes(JSON.stringify(envelope)), r.topic);
-    await publishSealed(node!.ctx, r, fromByteArray(sealed)).catch(() => {});
+    await transport.publishSealed(r.topic, sealed).catch(() => {});
   }
-}
-
-// Recursively hunt for the first plausible base64 payload string in the FFI event
-// object. The exact liblogosdelivery event schema is uncertain and may nest the
-// message under wakuMessage/message/etc., so we search rather than assume a path.
-// A payload is a non-trivial base64-ish string under a key named "payload".
-function findPayload(obj: any, depth = 0): string | null {
-  if (obj == null || depth > 6) return null;
-  if (typeof obj === "object") {
-    // Prefer an explicit `payload` field at this level.
-    const p = (obj as any).payload;
-    if (typeof p === "string" && p.length > 0) return p;
-    for (const k of Object.keys(obj)) {
-      const found = findPayload((obj as any)[k], depth + 1);
-      if (found) return found;
-    }
-  }
-  return null;
-}
-
-// A WakuMessage payload arrives either as a base64 STRING or a raw BYTE ARRAY
-// (number[]) — and when it's a byte array it may itself be the base64 *text* bytes
-// or the decoded sealed bytes. Produce every plausible sealed-bytes candidate; open()
-// is authenticated, so only the correct one decrypts. Shared by live receive + store.
-function payloadCandidates(payload: any): Uint8Array[] {
-  const out: Uint8Array[] = [];
-  if (Array.isArray(payload)) {
-    let s = "";
-    for (let i = 0; i < payload.length; i++) s += String.fromCharCode(payload[i] & 0xff);
-    try { out.push(toByteArray(s)); } catch { /* not base64 text */ }
-    out.push(Uint8Array.from(payload.map((b: number) => b & 0xff)));
-  } else if (typeof payload === "string") {
-    try {
-      const once = toByteArray(payload);
-      out.push(once); // single-decoded: a peer that sent the sealed bytes directly
-      // DOUBLE-decode: the desktop channel path base64s an already-base64 payload
-      // (kym_core bytesPayload wraps the base64 TEXT as bytes, then delivery_module
-      // base64Encodes again), so channel_message_received.payload decodes once to the
-      // ASCII of a base64 string — decode that string too to reach the sealed bytes.
-      // (The byte-array/raw path already covers this via toByteArray(fromCharCode…).)
-      try { out.push(toByteArray(utf8Decode(once))); } catch { /* not double-encoded */ }
-    } catch { /* not base64 */ }
-  }
-  return out;
-}
-
-// Decrypt one payload with a SPECIFIC budget's key (store path: we queried that
-// budget's topic, so we know the route). Returns the parsed wire envelope or null.
-function openForRoute(payload: any, r: Route): any | null {
-  for (const sealed of payloadCandidates(payload)) {
-    try {
-      return JSON.parse(utf8Decode(open(r.id, sealed, r.topic)));
-    } catch { /* wrong candidate — try next */ }
-  }
-  return null;
 }
 
 /**
- * THE RECEIVE PATH (net-new vs Perun). Subscribe to the native `logosMessage`
- * event stream. Each emission is {wakuPtr, event} where `event` is the
- * liblogosdelivery FFI event as a JSON *string*. We parse it defensively, locate
- * the base64 payload, decrypt+authenticate it with the household key (open()
- * throws on wrong key/topic/tamper — that throw is our safety net for a
- * mis-parsed shape: we simply drop the message), decode the wire envelope, and
- * for EVENT envelopes hand the inner event to onEvent (which appends+dedups+folds).
- *
- * Requires ensureNode() to have succeeded (needs the node's id + topic). Returns
- * an unsubscribe function.
+ * Register the receive callbacks. The shared transport owns the single native
+ * listener (attached in ensureNode); this just wires our dispatch into it. Returns an
+ * unsubscribe that detaches the callbacks. Safe to call before or after ensureNode.
  */
 export function startReceiving(
   onEvent: (budgetId: string, event: KymEvent) => void,
   onSyncReq?: (budgetId: string, from: string) => void
 ): () => void {
-  if (!LogosMessaging) return () => {};
-  if (!emitter) emitter = new NativeEventEmitter(LogosMessaging);
-  const sub = emitter.addListener("logosMessage", (evt: { wakuPtr?: string; event?: string }) => {
-    rxRaw++; // the native lib fired the callback AT ALL (relay receive works if this climbs)
-    // Tally by eventType BEFORE any node/decrypt gating, so the sample reflects every
-    // event that arrived. chan>0 = the SDS channel is unwrapping (receive path healthy);
-    // chan==0 while msg>0 = messages arrive but the channel layer never fires; err>0 =
-    // the channel fired but SDS/decrypt rejected it (lastErr says which).
-    try {
-      const s0 = String(evt?.event || "");
-      if (s0.indexOf("channel_message_received") >= 0) dChan++;
-      else if (s0.indexOf("message_received") >= 0) dMsg++;
-      else if (s0.indexOf("message_error") >= 0 || s0.indexOf("channel_message_error") >= 0) {
-        dErr++;
-        const em = JSON.parse(s0);
-        dErrText = String(em.error || em.message || "").slice(0, 90);
-      }
-      rxSample = `chan:${dChan} msg:${dMsg} err:${dErr} | ${dInfo || "lastErr[" + dErrText + "]"}`;
-    } catch { /* keep prior sample */ }
-    if (!node) return; // node not up yet — nothing to decrypt against
-    try {
-      const raw = evt?.event;
-      if (!raw) return;
-      const m = JSON.parse(raw);
-      // The WakuMessage sits under wakuMessage / message / the root (matches
-      // Alisher's receiver-android reference). Its `payload` is delivered as a
-      // BYTE ARRAY (number[]) — NOT a base64 string. The OLD findPayload only
-      // accepted a string, so it dropped every received message ("rxSeen 0").
-      const wm = m.wakuMessage || m.message || m;
-      const payload = wm && wm.payload != null ? wm.payload : m.payload;
-      if (payload == null) return;
-      rxSeen++; // a WakuMessage with a payload reached us over the mesh
-      const isChan = m && m.eventType === "channel_message_received";
-      // Build candidate sealed-bytes (base64-string bytes OR decoded bytes — the
-      // native side may deliver either). Route by decryption: for each candidate,
-      // try each budget's key. open() is authenticated, so only the right one wins.
-      const candidates = payloadCandidates(payload);
-      let openErr = "";
-      let matched = false;
-      for (const sealed of candidates) {
-        for (const r of routes) {
-          let plaintext: Uint8Array;
-          try {
-            plaintext = open(r.id, sealed, r.topic);
-          } catch (e) {
-            openErr = String((e && (e as any).message) || e).slice(0, 40);
-            continue; // not this candidate/budget
-          }
-          matched = true;
-          rxOpened++; // decrypted with one of our budget keys → it's ours
-          const env = JSON.parse(utf8Decode(plaintext));
-          if (env && env.type === "EVENT" && env.event) {
-            onEvent(r.budgetId, env.event as KymEvent);
-          } else if (env && env.type === "SYNC_REQ") {
-            onSyncReq?.(r.budgetId, typeof env.from === "string" ? env.from : "");
-          }
-          return; // matched — done
-        }
-      }
-      // First channel event that DIDN'T open: record why (senderId self-vs-hub, payload
-      // shape, how many candidates we tried, and the last open() throw).
-      if (isChan && !matched && dInfo === "") {
-        const pk =
-          typeof payload === "string"
-            ? "b64len" + payload.length
-            : Array.isArray(payload)
-              ? "arr" + payload.length
-              : typeof payload;
-        dInfo = `sid=${String(m.senderId || "?").slice(0, 8)} pl=${pk} cand=${candidates.length} openErr[${openErr || "none"}]`;
-      }
-    } catch {
-      // Drop anything we can't decrypt/parse. Safety net for foreign traffic and
-      // an uncertain FFI event shape — never throw here.
-    }
-  });
-  return () => sub.remove();
+  if (!transport.deliveryAvailable()) return () => {};
+  onEventCb = onEvent;
+  onSyncReqCb = onSyncReq || null;
+  return () => { onEventCb = null; onSyncReqCb = null; };
 }
 
-// How long to wait for a store node to answer one page, and the page size.
-const STORE_TIMEOUT_MS = 20000;
-const STORE_PAGE = 100;
-const STORE_MAX_PAGES = 25; // safety bound: 25 * 100 = 2500 events per topic
-
 /**
- * PULL history from the fleet store — the reliable catch-up path. Unlike live
- * receive (mesh-dependent) and SYNC_REQ (needs our publish to propagate, which the
- * asymmetric mobile mesh doesn't guarantee), this asks a fleet store node directly
- * for every message ever stored on each budget's content topic, then decrypts +
- * folds them. No dependency on the phone being able to publish.
- *
- * For each budget topic we page through the store (paginationCursor) and try each
- * bootstrap peer until one answers. Every stored message is decrypted with that
- * budget's key and EVENT envelopes are handed to onEvent (which dedups by event id,
- * so re-pulling is harmless). Returns a summary + sets storeInfo for the Sync card.
- *
- * NOTE: this only works if the fleet's store nodes retain traffic on our shard —
- * the one unknown we can't verify off-device. The per-topic counts in the returned
- * detail tell us immediately whether they do.
+ * PULL history from the fleet store — the reliable catch-up path. Delegates paging to
+ * the transport; for each stored message's candidates we open with the topic's budget
+ * key and fold EVENT envelopes (dedup by id, so re-pulling is harmless).
  */
 export async function storeSync(
   onEvent: (budgetId: string, event: KymEvent) => void
 ): Promise<{ msgs: number; events: number; detail: string }> {
   await ensureNode();
-  if (!node || typeof (LogosMessaging as any).storeQuery !== "function") {
-    storeInfo = "store: bridge missing (rebuild app)";
-    return { msgs: 0, events: 0, detail: storeInfo };
-  }
-  let totalMsgs = 0, totalEvents = 0;
-  const parts: string[] = [];
-  for (const r of routes) {
-    const label = r.topic.slice(7, 15); // short hex of the content topic
-    let cursor: any = undefined;
-    let topicMsgs = 0, topicEvents = 0, note = "";
-    for (let page = 0; page < STORE_MAX_PAGES; page++) {
-      const query: any = {
-        requestId: `kym-${Date.now()}-${page}`,
-        contentTopics: [r.topic],
-        includeData: true,
-        paginationForward: true,
-        paginationLimit: STORE_PAGE,
-      };
-      if (cursor) query.paginationCursor = cursor;
-      // Ask each fleet node until one answers this page.
-      let respStr: string | null = null;
-      for (const peer of BOOTSTRAP) {
+  return transport.storeSync((topic, candidates) => {
+    const primary = routes.find((x) => x.topic === topic);
+    const tryRoutes = primary ? [primary] : routes;
+    for (const cand of candidates) {
+      for (const r of tryRoutes) {
         try {
-          respStr = await (LogosMessaging as any).storeQuery(
-            node.ctx, JSON.stringify(query), peer, STORE_TIMEOUT_MS
-          );
-          if (respStr) break;
-        } catch {
-          respStr = null; // this store node failed — try the next
-        }
+          const env = JSON.parse(utf8Decode(open(r.id, cand, r.topic)));
+          if (env && env.type === "EVENT" && env.event) { onEvent(r.budgetId, env.event as KymEvent); return true; }
+        } catch { /* wrong candidate/key — try next */ }
       }
-      if (!respStr) { note = "no store peer answered"; break; }
-      // The JNI on_response returns the sentinel "on_response-ok" when the FFI calls
-      // back with an empty body — treat that as a successful empty result, not junk.
-      if (respStr.indexOf("{") !== 0) { note = respStr.slice(0, 40); break; }
-      let resp: any;
-      try { resp = JSON.parse(respStr); } catch { note = `bad json: ${respStr.slice(0, 30)}`; break; }
-      const status = resp.statusCode ?? resp.status_code;
-      if (status != null && status !== 200 && status !== 0) {
-        note = `status ${status} ${resp.statusDesc || resp.status_desc || ""}`.trim();
-      }
-      const msgs: any[] = resp.messages || resp.Messages || resp.messageData || [];
-      topicMsgs += msgs.length;
-      for (const entry of msgs) {
-        // Message may be nested under message/wakuMessage or be the message itself.
-        const wm = entry.message || entry.wakuMessage || entry;
-        const payload = wm && wm.payload != null ? wm.payload : entry.payload;
-        if (payload == null) continue;
-        const env = openForRoute(payload, r);
-        if (env && env.type === "EVENT" && env.event) {
-          onEvent(r.budgetId, env.event as KymEvent);
-          topicEvents++;
-        }
-      }
-      cursor = resp.paginationCursor ?? resp.pagination_cursor ?? resp.cursor;
-      if (!cursor || msgs.length === 0) break; // last page
     }
-    totalMsgs += topicMsgs;
-    totalEvents += topicEvents;
-    parts.push(`${label}:${topicMsgs}m/${topicEvents}e${note ? `(${note})` : ""}`);
-  }
-  storeInfo = `store: ${totalMsgs} msg → ${totalEvents} ev  [${parts.join("  ")}]`;
-  return { msgs: totalMsgs, events: totalEvents, detail: storeInfo };
+    return false;
+  });
 }
 
+// Receive diagnostics for the Sync card. Mapped from the transport's counters so the
+// shape KYM's UI expects (seen/opened/sent/raw/sample) is unchanged.
+export function getRx(): { seen: number; opened: number; sent: number; raw: number; sample: string } {
+  const c = transport.counters;
+  return { seen: c.rxSeen, opened: c.rxOpened, sent: c.txTotal, raw: c.rxRaw, sample: transport.getRxSample() };
+}
+
+/** Last store-query outcome (msg/event counts per topic), for the Sync card. */
+export function getStoreInfo(): string { return transport.getStoreInfo(); }
+
 /**
- * Live connectivity, parsed from the node's Prometheus metrics. As a RELAY node the
- * health signal is simply how many peers we're connected to (the mesh forms from
- * them); `mesh` counts gossipsub-mesh peers when the gauge is exposed.
- *   libp2p_peers - transport peers (connections to the fleet + discovered)
- * Returns null when unavailable (older bridge, no node) so callers can hide it.
+ * Live connectivity from the node's Prometheus metrics: peer count + gossipsub-mesh
+ * peers. Shard is derived from our topic (autoshard) to match the desktop's rs/2/N.
+ * Returns null when unavailable (older bridge / node down) so callers can hide it.
  */
 export async function getPeerCount(): Promise<{ peers: number; mesh: number; shard: string } | null> {
-  if (!LogosMessaging || !node) return null;
-  if (typeof (LogosMessaging as any).getNodeInfo !== "function") return null; // pre-0.8 bridge
-  try {
-    const metrics: string = await (LogosMessaging as any).getNodeInfo(node.ctx, "Metrics");
-    if (typeof metrics !== "string" || !metrics) return null;
-    let peers = -1;
-    let mesh = 0;
-    const shards = new Set<string>();
-    for (const raw of metrics.split("\n")) {
-      const line = raw.trim();
-      // Whatever pubsub shard(s) we're actually on — this is the number to compare
-      // against the desktop's /waku/2/rs/2/7. If it differs, that's the mismatch.
-      const sm = line.match(/\/waku\/2\/rs\/\d+\/\d+/g);
-      if (sm) sm.forEach((s) => shards.add(s.replace("/waku/2/rs/", "")));
-      if (!line || line.startsWith("#")) continue;
-      const value = Number(line.slice(line.lastIndexOf(" ") + 1));
-      if (!Number.isFinite(value)) continue;
-      if (line.startsWith("libp2p_peers ")) peers = Math.trunc(value);
-      else if (line.includes("gossipsub") && line.includes("mesh")) mesh += Math.trunc(value);
-    }
-    return peers < 0 ? null : { peers, mesh, shard: [...shards].join(",") || "?" };
-  } catch {
-    return null; // node down / metrics unavailable — not worth surfacing as an error
-  }
+  if (!transport.getCtx()) return null;
+  await transport.refreshPeerInfo();
+  const c = transport.counters;
+  if (c.peers < 0) return null;
+  const shard = routes.length ? `2/${transport.shardFor(routes[0].topic)}` : "?";
+  return { peers: c.peers, mesh: c.mesh, shard };
 }
 
 /** Stop the node (best-effort). */
 export async function stopNode(): Promise<void> {
-  if (renewTimer) { clearInterval(renewTimer); renewTimer = null; }
   routes = [];
-  if (node && LogosMessaging) {
-    const c = node.ctx;
-    node = null;
-    try {
-      await LogosMessaging.stop(c);
-    } catch {
-      /* ignore */
-    }
-  }
+  await transport.stop();
 }
