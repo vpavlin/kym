@@ -2,7 +2,7 @@
   "expo": {
     "name": "KYM",
     "slug": "kym",
-    "version": "0.14.15",
+    "version": "0.14.17",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "scheme": "kym",
@@ -17,7 +17,7 @@
     },
     "android": {
       "package": "co.logos.kym",
-      "versionCode": 41,
+      "versionCode": 43,
       "predictiveBackGestureEnabled": false,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
