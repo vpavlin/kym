@@ -1134,7 +1134,19 @@ void KymCoreImpl::bootstrapDelivery() {
     // background and we flip m_nodeReady when the topic subscription lands.
     setStatus("Connecting...");
     const char *dlog = std::getenv("KYM_DELIVERY_LOG");
-    LogosMap cfg = {{"logLevel", dlog ? std::string(dlog) : std::string("INFO")}, {"mode", "Core"}, {"preset", "logos.dev"}};
+    // FLEET = logos.test (cluster 2). logos.dev migrated to CLUSTER 3 but the baked
+    // preset still maps logos.dev→cluster 2, so fresh nodes never mesh; logos.test
+    // stays cluster 2, keeping KYM's shard (7) valid. Pin entryNodes to match mobile
+    // + the hub. (See qaku_core for the same move.)
+    LogosMap cfg = {{"logLevel", dlog ? std::string(dlog) : std::string("INFO")}, {"mode", "Core"}, {"preset", "logos.test"}, {"relay", true},
+        {"entryNodes", LogosMap::array({
+            "/dns4/node-01.do-ams3.logos.test.status.im/tcp/30303/p2p/16Uiu2HAmQ9X2xDfPG3uL77V9piYDhjq14JhKCtcmNYsTMKNqrKCj",
+            "/dns4/node-02.do-ams3.logos.test.status.im/tcp/30303/p2p/16Uiu2HAmB8NYprrfQrgWVzsJtYWkfjsXbmJEGNMG6othXsQ53BwG",
+            "/dns4/node-01.gc-us-central1-a.logos.test.status.im/tcp/30303/p2p/16Uiu2HAmF8WtwGPmeGHgYAX2277jHgy5cW9F7zsB8EqUjBZQAZQ3",
+            "/dns4/node-02.gc-us-central1-a.logos.test.status.im/tcp/30303/p2p/16Uiu2HAmUuXhUW9bdJpzN1kfDziFiUZo4bszTk66cvr7uuyCHXR7",
+            "/dns4/node-01.ac-cn-hongkong-c.logos.test.status.im/tcp/30303/p2p/16Uiu2HAmL3oU95jh1BZHozn3uNhx8HEneirgr8M1jEAapzXGDqRF",
+            "/dns4/node-02.ac-cn-hongkong-c.logos.test.status.im/tcp/30303/p2p/16Uiu2HAm28CoBZjpyxsanC8tQpbvZ7bZJnVYuB1EgFzb571qpWsV",
+        })}};
     // Diagnostic override: KYM_DELIVERY_CFG is a JSON object merged over the
     // default cfg, so a headless hub can try alternate WakuNodeConf keys (drop the
     // preset, disable rlnRelay, set a dataDir/ports) WITHOUT a rebuild while we pin
