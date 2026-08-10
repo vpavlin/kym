@@ -315,7 +315,7 @@ function Shell() {
             <Text style={styles.ldBannerT}>{serviceNodeDown() ? "Logos Delivery isn't running" : "KYM isn't approved yet"}</Text>
             <Text style={styles.ldBannerSub}>{serviceNodeDown() ? "Tap to open it — KYM can't sync until it's running." : "Tap to open Logos Delivery and approve KYM."}</Text>
           </View>
-          <Text style={styles.ldBannerCta}>OPEN \u203A</Text>
+          <Text style={styles.ldBannerCta}>OPEN ›</Text>
         </Pressable>
       ) : null}
       <View style={styles.content}>
