@@ -2,7 +2,7 @@
   "expo": {
     "name": "KYM",
     "slug": "kym",
-    "version": "0.14.18",
+    "version": "0.14.19",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "scheme": "kym",
@@ -17,7 +17,7 @@
     },
     "android": {
       "package": "co.logos.kym",
-      "versionCode": 44,
+      "versionCode": 45,
       "predictiveBackGestureEnabled": false,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
@@ -45,7 +45,8 @@
           "cameraPermission": "KYM scans your receipt to prefill the amount.",
           "photosPermission": "KYM reads a receipt photo to prefill the amount."
         }
-      ]
+      ],
+      "./src/lib/logos-transport-pkg/plugins/withDeliveryClient.js"
     ]
   }
 }

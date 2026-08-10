@@ -1,7 +1,7 @@
 // Setup / seed. One tap seeds a meaningful demo budget so balances are non-trivial;
 // or add your own account/category. Also the reset. Nothing here is special — it
 // just emits the same account.create / category.create events the desktop uses.
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useState, useEffect } from "react";
 import {
   Alert,
   Pressable,
@@ -14,6 +14,7 @@ import {
 import { useBudget } from "../state/BudgetContext";
 import { formatMoney, toMilli, CURRENCIES } from "../lib/engine";
 import { theme } from "../ui/theme";
+import * as SecureStore from "expo-secure-store";
 
 const ACCOUNT_TYPES = ["checking", "savings", "cash", "creditCard", "tracking"];
 const CURRENCY_CODES = Object.keys(CURRENCIES);
@@ -54,6 +55,9 @@ export function SetupScreen() {
 
   const [catName, setCatName] = useState("");
   const [catGroup, setCatGroup] = useState<string>("Everyday");  // group NAME, not id
+  const [sharedNode, setSharedNode] = useState(false);
+  useEffect(() => { SecureStore.getItemAsync("kym-shared-node").then((v) => setSharedNode(v === "1")).catch(() => {}); }, []);
+  const setSharedNodePref = (v: boolean) => { setSharedNode(v); SecureStore.setItemAsync("kym-shared-node", v ? "1" : "0").catch(() => {}); };
 
   const groups = state.groups;
   const alreadySeeded = state.accounts.length > 0;
@@ -130,6 +134,23 @@ export function SetupScreen() {
         account (500,00 €), two groups, six categories, and this month's assignments — so
         Ready to Assign and envelopes are meaningful immediately, in the CZK + foreign model.
       </Text>
+
+      {/* Delivery node — KYM's own embedded node, or the device-wide Logos Delivery node. */}
+      <Text style={styles.section}>Delivery node (experimental)</Text>
+      <View style={styles.card}>
+        <View style={styles.chipRow}>
+          {(([["Own node", false], ["Shared", true]]) as [string, boolean][]).map(([lbl, v]) => (
+            <Pressable key={lbl} style={[styles.chip, sharedNode === v && styles.chipActive]} onPress={() => setSharedNodePref(v)}>
+              <Text style={[styles.chipText, sharedNode === v && styles.chipTextActive]}>{lbl}</Text>
+            </Pressable>
+          ))}
+        </View>
+        <Text style={styles.note}>
+          {sharedNode
+            ? "Route through the Logos Delivery app's one device-wide node (approve KYM there once). Falls back to KYM's own node if not installed. Relaunch to apply."
+            : "KYM runs its own embedded node (default). Relaunch to apply a change."}
+        </Text>
+      </View>
 
       {/* Budget currency — the single currency envelopes and Ready to Assign are in. */}
       <Text style={styles.section}>Budget currency</Text>
