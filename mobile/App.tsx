@@ -24,6 +24,7 @@ import { ReviewScreen } from "./src/screens/ReviewScreen";
 import { SetupScreen } from "./src/screens/SetupScreen";
 import { PairingScreen } from "./src/screens/PairingScreen";
 import { theme } from "./src/ui/theme";
+import { usingServiceBackend, serviceNodeDown, serviceAwaitingApproval, launchSharedService, refreshPeerInfo } from "./src/lib/logos-transport";
 
 type Tab = "add" | "budget" | "review" | "setup" | "pair";
 
@@ -272,6 +273,8 @@ function Shell() {
   // Open modals capture back themselves (onRequestClose), so this only runs when
   // none is showing.
   const [history, setHistory] = useState<Tab[]>(["add"]);
+  const [, setLdTick] = useState(0);
+  useEffect(() => { const t = setInterval(() => { refreshPeerInfo().catch(() => {}); setLdTick((n) => n + 1); }, 3000); return () => clearInterval(t); }, []);
   const tab = history[history.length - 1];
   const go = (t: Tab) =>
     setHistory((h) => {
@@ -305,6 +308,16 @@ function Shell() {
 
   return (
     <View style={styles.body}>
+      {usingServiceBackend() && (serviceNodeDown() || serviceAwaitingApproval()) ? (
+        <Pressable style={styles.ldBanner} onPress={() => launchSharedService()}>
+          <Text style={styles.ldBannerIcon}>{serviceNodeDown() ? "\u26A0\uFE0F" : "\uD83D\uDD12"}</Text>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.ldBannerT}>{serviceNodeDown() ? "Logos Delivery isn't running" : "KYM isn't approved yet"}</Text>
+            <Text style={styles.ldBannerSub}>{serviceNodeDown() ? "Tap to open it — KYM can't sync until it's running." : "Tap to open Logos Delivery and approve KYM."}</Text>
+          </View>
+          <Text style={styles.ldBannerCta}>OPEN \u203A</Text>
+        </Pressable>
+      ) : null}
       <View style={styles.content}>
         {tab === "add" && <CaptureScreen goSetup={() => go("setup")} />}
         {tab === "budget" && <BudgetScreen />}
@@ -387,6 +400,11 @@ const styles = StyleSheet.create({
   syncDot: { width: 8, height: 8, borderRadius: 4 },
   syncText: { color: theme.textDim, fontSize: 11 },
   body: { flex: 1 },
+  ldBanner: { flexDirection: "row", alignItems: "center", gap: 12, backgroundColor: "#c2410c", paddingVertical: 14, paddingHorizontal: 16 },
+  ldBannerIcon: { fontSize: 24 },
+  ldBannerT: { color: "#ffffff", fontSize: 15, fontWeight: "800" },
+  ldBannerSub: { color: "#ffe3cf", fontSize: 12, marginTop: 2, lineHeight: 16 },
+  ldBannerCta: { color: "#ffffff", fontSize: 14, fontWeight: "800" },
   content: { flex: 1 },
   loading: { flex: 1, alignItems: "center", justifyContent: "center", gap: 12 },
   loadingText: { color: theme.textDim },
