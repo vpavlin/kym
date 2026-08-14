@@ -24,7 +24,7 @@ import { ReviewScreen } from "./src/screens/ReviewScreen";
 import { SetupScreen } from "./src/screens/SetupScreen";
 import { PairingScreen } from "./src/screens/PairingScreen";
 import { theme } from "./src/ui/theme";
-import { usingServiceBackend, serviceNodeDown, serviceAwaitingApproval, launchSharedService, refreshPeerInfo } from "./src/lib/logos-transport";
+import { usingServiceBackend, serviceNodeDown, serviceAwaitingApproval, launchSharedService, refreshPeerInfo } from "./src/lib/loam-transport";
 
 type Tab = "add" | "budget" | "review" | "setup" | "pair";
 

@@ -1,11 +1,11 @@
-// KYM's thin adapter over the SHARED logos-transport (mobile/src/lib/logos-transport.ts).
+// KYM's thin adapter over the SHARED loam-transport (mobile/src/lib/loam-transport.ts).
 // The transport moves OPAQUE sealed bytes on content topics and is byte-for-byte the
 // same wire KYM has always used (it was extracted FROM this file) — so this swap keeps
 // KYM's proven sync. This adapter supplies the ONLY app-specific pieces:
 //   • ROUTES — one household per budget: { budgetId, Identity, derived topic }
 //   • CRYPTO — seal/open with the budget's key (identity.ts), AAD = topic
 //   • ENVELOPE dispatch — EVENT → onEvent(budgetId,event), SYNC_REQ → onSyncReq(...)
-// If sync ever breaks again, the bug is in logos-transport (shared, fix once) or here
+// If sync ever breaks again, the bug is in loam-transport (shared, fix once) or here
 // (routes/crypto/envelope) — never a re-implemented wire path.
 import { loadIdentity } from "./identityStore";
 import { loadRegistry } from "./budgets";
@@ -13,7 +13,7 @@ import { seal, open, topicFor, Identity } from "./identity";
 import type { KymEvent } from "./engine";
 import { getDeviceId } from "./device";
 import { utf8Bytes, utf8Decode } from "./utf8";
-import * as transport from "./logos-transport";
+import * as transport from "./loam-transport";
 import * as SecureStore from "expo-secure-store";
 
 /** True if the native module is present in this build at all. */
