@@ -1083,48 +1083,50 @@ void KymCoreImpl::bootstrapDelivery() {
     // receives with. (Headless/logoscore still shows "No external callbacks" and
     // doesn't deliver via this event path regardless of order; that's a separate
     // cross-module-event gap, tracked apart from the desktop.)
-    modules().delivery_module.onMessageReceived(
-        [this](const std::string &, const std::string &contentTopic, const LogosMap &payload, int64_t) {
-            auto toWire = [](const LogosMap &v) -> std::string {
-                if (v.is_string()) return v.get<std::string>();
-                if (v.is_array()) {
-                    std::string s; s.reserve(v.size());
-                    for (const auto &c : v) if (c.is_number_integer()) s.push_back((char)c.get<int>());
-                    return s;
+    // Receive via the loam_core facade. loam_core owns the delivery node + bearer(s), dedups
+    // across them (frameId), and hands us the payload as base64 of the ONCE-decoded sealed
+    // bytes. We base64-decode to the raw sealed bytes and ingest under the owning topic —
+    // ingestRaw opens with THAT budget's key. (The delivery payload-shape variance — string /
+    // byte-array / {_bytes} — is now loam_core's concern, not ours.)
+    if (!m_loamWired) {
+        m_loamWired = true;
+        modules().loam_core.onReceived(
+            [this](const std::string &topic, const std::string &, const std::string &payloadB64, int64_t) {
+                std::string sealed = b64decode(payloadB64);
+                if (!sealed.empty()) ingestRaw(topic, sealed);
+            });
+        // Readiness: loam_core.start() returns early (async node bringup), so we learn the node
+        // is actually up via statusChanged("Connected"). That's where we mark ready and join
+        // every budget's topic — replacing the old createNode→start success callback.
+        modules().loam_core.onStatusChanged([this](const std::string &s) {
+            if (s != "Connected" || m_nodeReady) return;
+            std::lock_guard<std::recursive_mutex> lk(m_mtx);
+            try {
+                m_nodeReady = true;
+                setStatus("Connected · paired");
+                // Subscribe EVERY budget's topic and reconcile each — all households sync in
+                // the background, not just the one being viewed.
+                for (auto &kv : m_budgets) {
+                    Budget &b = kv.second;
+                    if (!b.haveKey) continue;
+                    b.subscribed = true;
+                    joinBudgetTransport(b);
+                    sendSummary(b);
+                    b.seedStoreRemaining = 3;   // seed the fleet store a few times, then stop
+                    b.lastAutoResync = 0;
                 }
-                if (v.is_object() && v.contains("_bytes") && v["_bytes"].is_string())
-                    return b64decode(v["_bytes"].get<std::string>());
-                return std::string();
-            };
-            std::string b64 = toWire(payload);
-            if (b64.empty() && payload.is_object() && payload.contains("payload"))
-                b64 = toWire(payload["payload"]);
-            // Route to the budget that owns this content topic (each household has a
-            // unique topic). ingestRaw opens with THAT budget's key + ingests there.
-            if (!b64.empty()) ingestRaw(contentTopic, b64decode(b64));
-        });
-    // Reliable-Channel receive (SDS) — counterpart to channelSend. channelId == the
-    // budget's derived topic (we create the channel with id == topic), so route
-    // straight there. Same payload decode as the raw path. Registering both handlers
-    // is harmless: only the transport we actually joined delivers events.
-    modules().delivery_module.onChannelMessageReceived(
-        [this](const std::string &channelId, const std::string &, const LogosMap &payload, int64_t) {
-            auto toWire = [](const LogosMap &v) -> std::string {
-                if (v.is_string()) return v.get<std::string>();
-                if (v.is_array()) {
-                    std::string s; s.reserve(v.size());
-                    for (const auto &c : v) if (c.is_number_integer()) s.push_back((char)c.get<int>());
-                    return s;
+                publishBudget();
+                refreshPeerCount();
+                if (const char *seed = std::getenv("KYM_HUB_SEED_CATEGORY")) {
+                    std::string name = seed, cid = "cat:" + slug(name);
+                    if (!cur().categoryName.count(cid)) addCategory(name, "Everyday");
+                    cur().seedCatId = cid; cur().seedTicks = 8;
+                    fprintf(stderr, "KYM hub seeded category '%s' (%s)\n", name.c_str(), cid.c_str());
                 }
-                if (v.is_object() && v.contains("_bytes") && v["_bytes"].is_string())
-                    return b64decode(v["_bytes"].get<std::string>());
-                return std::string();
-            };
-            std::string b64 = toWire(payload);
-            if (b64.empty() && payload.is_object() && payload.contains("payload"))
-                b64 = toWire(payload["payload"]);
-            if (!b64.empty()) ingestRaw(channelId, b64decode(b64));
+            } catch (const std::exception &ex) { fprintf(stderr, "KYMDBG ready EXCEPTION: %s\n", ex.what()); }
+            catch (...) { fprintf(stderr, "KYMDBG ready EXCEPTION (unknown)\n"); }
         });
+    }
     // IMPORTANT: run entirely through the ASYNC delivery callers. The sync
     // createNode()/start() block on network setup (connecting to the logos.dev
     // Waku fleet); calling them from onContextReady() stalls this module's
@@ -1160,53 +1162,22 @@ void KymCoreImpl::bootstrapDelivery() {
     // failed createNode/start still cascaded into "Connected · paired" — the ui
     // claimed to be online while the node was never up, which makes a silent
     // sync impossible to diagnose. A failure now stops the chain and says so.
+    // Route the node through the loam_core FACADE. loam_core.start() owns createNode+start
+    // (and the headless "register handlers before createNode" delay, via hubMode), forwards
+    // this full cfg to the delivery node verbatim, and calls us back on onReceived (registered
+    // above). useChannels/hubMode are loam-only flags; loam_core strips them from the node cfg.
+    // One start() replaces the createNode→start chain; the per-budget join/summary/seed is
+    // unchanged. senderId (our SDS id) is set first so channelCreate uses it.
+    cfg["useChannels"] = (std::getenv("KYM_USE_CHANNELS") != nullptr);
+    cfg["hubMode"] = (std::getenv("KYM_HUB") != nullptr);
     std::string cfgStr = cfg.dump();
-    auto startNode = [this, cfgStr]() {
-    modules().delivery_module.createNodeAsync(cfgStr, [this](StdLogosResult r) {
-        fprintf(stderr, "KYMDBG createNode cb success=%d err=%s\n", (int)r.success, r.error.c_str());
-        if (!r.success) { m_deliveryStarting = false; setStatus("Delivery error (createNode): " + r.error); return; }
-        modules().delivery_module.startAsync([this](StdLogosResult r2) {
-            fprintf(stderr, "KYMDBG start cb success=%d\n", (int)r2.success);
-            if (!r2.success) { m_deliveryStarting = false; setStatus("Delivery error (start): " + r2.error); return; }
-            try {
-                m_nodeReady = true;
-                setStatus("Connected · paired");
-                // Subscribe EVERY budget's topic and reconcile each — all households
-                // sync in the background, not just the one being viewed.
-                for (auto &kv : m_budgets) {
-                    Budget &b = kv.second;
-                    if (!b.haveKey) continue;
-                    b.subscribed = true;
-                    joinBudgetTransport(b);
-                    sendSummary(b);
-                    // Arm the store-seed burst: maybeAutoResync (every ~30s) will push
-                    // the whole log this many times, then stop — seeding the fleet store
-                    // for phones that can't get a SYNC_REQ through. Re-armed on restart.
-                    b.seedStoreRemaining = 3;
-                    b.lastAutoResync = 0;   // let the first seed fire on the next tick
-                }
-                publishBudget();       // reflect "paired" now that the node is up
-                refreshPeerCount();    // and start reporting who we can actually reach
-                // Hub demo: seed a category into the CURRENT budget so a GUI peer sees hub→peer delivery.
-                if (const char *seed = std::getenv("KYM_HUB_SEED_CATEGORY")) {
-                    std::string name = seed, cid = "cat:" + slug(name);
-                    if (!cur().categoryName.count(cid)) addCategory(name, "Everyday"); // creates + broadcasts
-                    cur().seedCatId = cid; cur().seedTicks = 8;   // re-broadcast ~48s to beat the flaky shard
-                    fprintf(stderr, "KYM hub seeded category '%s' (%s)\n", name.c_str(), cid.c_str());
-                }
-            } catch (const std::exception &ex) {
-                fprintf(stderr, "KYMDBG start-cb EXCEPTION: %s\n", ex.what());
-            } catch (...) { fprintf(stderr, "KYMDBG start-cb EXCEPTION (unknown)\n"); }
-        });
+    // Set our SDS senderId, then start the node through the facade. Both are fire-and-forget:
+    // loam_core methods return a status string ("" ok / error text); node READINESS arrives via
+    // the onStatusChanged("Connected") handler wired above, not from these callbacks.
+    modules().loam_core.setSenderIdAsync(m_deviceId, [](std::string) {});
+    modules().loam_core.startAsync(cfgStr, [](std::string err) {
+        if (!err.empty()) fprintf(stderr, "KYMDBG loam_core.start returned: %s\n", err.c_str());
     });
-    };
-    // Headless: register the receive-handler event, THEN delay createNode so the
-    // onMessageReceived subscription IPC reaches the delivery_module process before
-    // the node is built — otherwise nwaku comes up "No external callbacks to be
-    // set" and delivered messages never reach kym_core (rxSeen stuck at 0). The
-    // desktop host wires the event synchronously, so the GUI calls startNode now.
-    if (std::getenv("KYM_HUB")) QTimer::singleShot(1500, startNode);
-    else startNode();
 }
 
 // Peers we can actually reach. "Connected" only ever meant "subscribe() returned"
@@ -1231,11 +1202,17 @@ void KymCoreImpl::refreshPeerCount() {
     // and stalling the heartbeat. (This, alongside the sync send(), WAS the "core
     // module stuck" bug.) Fetch Metrics async and parse in the callback, which
     // dispatches back on the event-loop thread; nothing here ever blocks it.
-    modules().delivery_module.getNodeInfoAsync("Metrics", [this](StdLogosResult mR) {
+    modules().loam_core.metricsJsonAsync([this](std::string metrics) {
         std::lock_guard<std::recursive_mutex> lk(m_mtx);
-        if (!mR.success) return;
-        const std::string metrics = mR.value.is_string() ? mR.value.get<std::string>() : mR.value.dump();
-        parseAndApplyMetrics(metrics);
+        // loam_core metrics: {"bearers":[...],"peers":N,"connected":bool}. Use the delivery
+        // peer count for the reachability signal + the hub heartbeat brief.
+        try {
+            auto j = json::parse(metrics, nullptr, false);
+            if (j.is_object()) {
+                if (j.contains("peers") && j["peers"].is_number()) m_peerCount = j["peers"].get<long>();
+                m_metricsBrief = j.dump();
+            }
+        } catch (...) { /* leave last-known */ }
     });
 }
 
@@ -1393,35 +1370,17 @@ void KymCoreImpl::sealAndSend(Budget &b, const kym::Event &e) {
 // send() would block the event-loop thread through a stalling lightpush and freeze
 // the module (the "core stuck" bug); delivery reports outcomes via its own events.
 void KymCoreImpl::deliverySend(const std::string &topic, const std::string &b64) {
-    static const bool forceArray = std::getenv("KYM_SEND_ARRAY") != nullptr;
-    static const bool useChannels = std::getenv("KYM_USE_CHANNELS") != nullptr;
-    auto attempt = [&](int repr) -> bool {
-        try {
-            LogosMap p = (repr == 1) ? bytesPayload(b64) : LogosMap(b64);
-            if (useChannels)
-                // channelId == the content topic — the reliable channel we joined for
-                // this budget. SDS handles ordering + gap detection + retransmit.
-                modules().delivery_module.channelSendAsync(topic, p, [](StdLogosResult) {});
-            else
-                modules().delivery_module.sendAsync(topic, p, [](StdLogosResult) {});
-            return true;
-        } catch (...) { return false; }
-    };
-    if (forceArray) { attempt(1); return; }
-    if (m_sendRepr == 1 || m_sendRepr == 2) { if (attempt(m_sendRepr)) return; m_sendRepr = 0; }
-    if (attempt(1)) { m_sendRepr = 1; return; }        // newer builds (current fleet)
-    if (attempt(2)) { m_sendRepr = 2; return; }        // older builds (string payload)
-    fprintf(stderr, "KYMTX deliverySend: no working payload representation\n");
+    // loam_core.sendSealed fans our sealed payload (base64) to every bearer and owns the
+    // double-b64 wire framing + the array/string payload-representation probe internally.
+    // Fire-and-forget (async): a sync send would block the event-loop thread on a stalling
+    // lightpush and freeze the module (the "core stuck" bug).
+    modules().loam_core.sendSealedAsync(topic, b64, [](std::string) {});
 }
 
 void KymCoreImpl::joinBudgetTransport(Budget &b) {
-    if (std::getenv("KYM_USE_CHANNELS"))
-        // Reliable Channel: channelId == contentTopic == the budget's derived topic,
-        // so all household devices join one SDS channel; senderId identifies us.
-        modules().delivery_module.channelCreateAsync(b.topic, b.topic, m_deviceId,
-                                                     [](StdLogosResult) {});
-    else
-        modules().delivery_module.subscribeAsync(b.topic, [](StdLogosResult) {});
+    // loam_core.join() subscribes the content topic (+ creates the SDS channel with our
+    // senderId when useChannels) — all household devices join the one topic/channel.
+    modules().loam_core.joinAsync(b.topic, [](std::string) {});
 }
 
 void KymCoreImpl::sendSyncReq() {

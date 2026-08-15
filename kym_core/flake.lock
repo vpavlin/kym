@@ -261,6 +261,7 @@
       "inputs": {
         "logos-delivery": "logos-delivery",
         "logos-module-builder": [
+          "loam_core",
           "logos-module-builder"
         ],
         "nix-bundle-lgx": "nix-bundle-lgx"
@@ -277,6 +278,29 @@
         "owner": "logos-co",
         "ref": "v0.2.0",
         "repo": "logos-delivery-module",
+        "type": "github"
+      }
+    },
+    "loam_core": {
+      "inputs": {
+        "delivery_module": "delivery_module",
+        "logos-module-builder": [
+          "logos-module-builder"
+        ]
+      },
+      "locked": {
+        "dir": "core",
+        "lastModified": 1786805321,
+        "narHash": "sha256-UtaaI8pFiGXYRJEvVMhaKZ1GQNCtNSzyi/0YOwoa45c=",
+        "owner": "vpavlin",
+        "repo": "loam-basecamp",
+        "rev": "e16b69db8cbec1d8730c6f483736ca1864d91190",
+        "type": "github"
+      },
+      "original": {
+        "dir": "core",
+        "owner": "vpavlin",
+        "repo": "loam-basecamp",
         "type": "github"
       }
     },
@@ -21305,6 +21329,7 @@
       "inputs": {
         "logos-nix": "logos-nix_2",
         "nixpkgs": [
+          "loam_core",
           "delivery_module",
           "nix-bundle-lgx",
           "logos-package",
@@ -31542,6 +31567,7 @@
       "inputs": {
         "logos-nix": "logos-nix_3",
         "nixpkgs": [
+          "loam_core",
           "delivery_module",
           "nix-bundle-lgx",
           "nix-bundle-dir",
@@ -35212,6 +35238,7 @@
         "logos-package": "logos-package",
         "nix-bundle-dir": "nix-bundle-dir",
         "nixpkgs": [
+          "loam_core",
           "delivery_module",
           "nix-bundle-lgx",
           "logos-nix",
@@ -48238,13 +48265,14 @@
     },
     "root": {
       "inputs": {
-        "delivery_module": "delivery_module",
+        "loam_core": "loam_core",
         "logos-module-builder": "logos-module-builder"
       }
     },
     "rust-overlay": {
       "inputs": {
         "nixpkgs": [
+          "loam_core",
           "delivery_module",
           "logos-delivery",
           "nixpkgs"
@@ -48267,6 +48295,7 @@
     "rust-overlay_2": {
       "inputs": {
         "nixpkgs": [
+          "loam_core",
           "delivery_module",
           "logos-delivery",
           "zerokit",
@@ -48415,6 +48444,7 @@
     "zerokit": {
       "inputs": {
         "nixpkgs": [
+          "loam_core",
           "delivery_module",
           "logos-delivery",
           "nixpkgs"

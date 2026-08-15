@@ -7,7 +7,7 @@
   "description": "KYM engine and sync core: the append-only event-log budget engine, household crypto, and Delivery sync. Runs headless (the always-on hub) and behind the kym ui_qml view.",
   "main": "kym_core_plugin",
   "dependencies": [
-    "delivery_module"
+    "loam_core"
   ],
   "nix": {
     "packages": {

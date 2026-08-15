@@ -242,6 +242,8 @@ private:
     std::string m_deviceId = "kym-core", m_budgetJson = "{}", m_status = "Starting...";
     std::string m_authorName;   // human attribution name stamped on locally-authored events ("" = off)
     bool m_nodeReady = false, m_ready = false;
+    // loam_core receive+status handlers are registered once (not per bootstrap retry).
+    bool m_loamWired = false;
     // True while a createNode→start→subscribe chain is in flight, so the poll
     // (hub loop / view) can't launch a second, overlapping delivery startup.
     bool m_deliveryStarting = false;
