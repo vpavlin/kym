@@ -25,6 +25,7 @@ import { SetupScreen } from "./src/screens/SetupScreen";
 import { PairingScreen } from "./src/screens/PairingScreen";
 import { theme } from "./src/ui/theme";
 import { usingServiceBackend, serviceNodeDown, serviceAwaitingApproval, launchSharedService, refreshPeerInfo } from "./src/lib/loam-transport";
+import { SharedNodeStatus } from "./src/lib/loam-transport-pkg/src/SharedNodeStatus";
 
 type Tab = "add" | "budget" | "review" | "setup" | "pair";
 
@@ -308,16 +309,7 @@ function Shell() {
 
   return (
     <View style={styles.body}>
-      {usingServiceBackend() && (serviceNodeDown() || serviceAwaitingApproval()) ? (
-        <Pressable style={styles.ldBanner} onPress={() => launchSharedService()}>
-          <Text style={styles.ldBannerIcon}>{serviceNodeDown() ? "\u26A0\uFE0F" : "\uD83D\uDD12"}</Text>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.ldBannerT}>{serviceNodeDown() ? "Logos Delivery isn't running" : "KYM isn't approved yet"}</Text>
-            <Text style={styles.ldBannerSub}>{serviceNodeDown() ? "Tap to open it — KYM can't sync until it's running." : "Tap to open Logos Delivery and approve KYM."}</Text>
-          </View>
-          <Text style={styles.ldBannerCta}>OPEN ›</Text>
-        </Pressable>
-      ) : null}
+      <SharedNodeStatus appName="KYM" />
       <View style={styles.content}>
         {tab === "add" && <CaptureScreen goSetup={() => go("setup")} />}
         {tab === "budget" && <BudgetScreen />}
