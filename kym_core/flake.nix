@@ -4,8 +4,8 @@
   inputs = {
     # Same pinned SDK rev + delivery_module version as module/flake.nix, so the
     # hub and the desktop/mobile peers build against one SDK (avoids IPC skew).
-    delivery_module.url = "github:logos-co/logos-delivery-module/feat-add-channel-api-support";
-    logos-module-builder.url = "github:logos-co/logos-module-builder/afe4430ee6eb";
+    delivery_module.url = "github:logos-co/logos-delivery-module/v0.2.0";
+    logos-module-builder.url = "github:logos-co/logos-module-builder/0.2.6";
     delivery_module.inputs.logos-module-builder.follows = "logos-module-builder";
   };
 
