@@ -76,6 +76,17 @@ inline std::string topicFor(const Identity &id, int epoch = 0) {
   return "/kym/1/" + toHex(t) + "/proto";
 }
 
+// Deterministic 12-byte nonce derived from a seal id (ADR 0011). Byte-identical to
+// loam-sync crypto.hpp nonceFor() and the phone's identity.ts: pass an immutable
+// event's id so a re-seal is byte-identical and the fleet store dedups it (fixes
+// store bloat + the cold-start truncation). Ephemeral control frames keep a random
+// nonce so a fresh send is never collapsed onto an old one.
+inline Bytes nonceFor(const Identity &id, const std::string &eventId) {
+  Bytes n = hmac_sha256(id.Ke, strBytes("kym/nonce/v1|" + eventId));
+  n.resize(12);
+  return n;
+}
+
 // sealed = nonce(12) ‖ ciphertext ‖ tag(16)  (tag appended, as @noble does).
 inline Bytes seal(const Identity &id, const Bytes &plaintext, const std::string &topic, const Bytes &nonce) {
   Bytes aad = strBytes(topic);

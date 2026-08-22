@@ -1359,7 +1359,9 @@ void KymCoreImpl::ingestRaw(const std::string &contentTopic, const std::string &
 
 void KymCoreImpl::sealAndSend(Budget &b, const kym::Event &e) {
     if (!m_nodeReady || !b.haveKey) return;
-    kym::Bytes nonce(12); RAND_bytes(nonce.data(), 12);
+    // Deterministic nonce keyed on the immutable event id (ADR 0011): re-sealing
+    // the same event is byte-identical, so the fleet store dedups retransmits.
+    kym::Bytes nonce = kym::nonceFor(b.identity, e.id);
     kym::Bytes sealed = kym::seal(b.identity, kym::strBytes(kym::encodeEventEnvelopeStd(e)), b.topic, nonce);
     deliverySend(b.topic, b64encode(std::string(sealed.begin(), sealed.end())));
 }
