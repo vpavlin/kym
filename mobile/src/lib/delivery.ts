@@ -15,6 +15,12 @@ import { getDeviceId } from "./device";
 import { utf8Bytes, utf8Decode } from "./utf8";
 import * as transport from "./loam-transport";
 import * as SecureStore from "expo-secure-store";
+import * as Crypto from "expo-crypto";
+
+/** A short random hex token — seeds the deterministic nonce for ephemeral control frames. */
+function randToken(): string {
+  return Array.from(Crypto.getRandomBytes(8), (b) => b.toString(16).padStart(2, "0")).join("");
+}
 
 /** True if the native module is present in this build at all. */
 export function deliveryAvailable(): boolean {
@@ -108,7 +114,9 @@ export async function sendEnvelope(event: KymEvent, budgetId: string): Promise<v
   const r = routes.find((x) => x.budgetId === budgetId);
   if (!r) return;
   const envelope = { v: 1, type: "EVENT", event };
-  const sealed = seal(r.id, utf8Bytes(JSON.stringify(envelope)), r.topic);
+  // Deterministic nonce keyed on the immutable event id → a re-seal is
+  // byte-identical, so the fleet store dedups retransmits (ADR 0011).
+  const sealed = seal(r.id, event.id, utf8Bytes(JSON.stringify(envelope)), r.topic);
   await transport.publishSealed(r.topic, sealed);
 }
 
@@ -132,7 +140,10 @@ export async function sendSyncReq(deviceId: string): Promise<void> {
   await ensureNode();
   for (const r of routes) {
     const envelope = { v: 1, type: "SYNC_REQ", from: deviceId };
-    const sealed = seal(r.id, utf8Bytes(JSON.stringify(envelope)), r.topic);
+    // Ephemeral control frame — a fresh per-send seed keeps the deterministic
+    // nonce unique so a fresh catch-up request is never deduped by an old one.
+    const seed = `SYNC_REQ|${deviceId}|${randToken()}`;
+    const sealed = seal(r.id, seed, utf8Bytes(JSON.stringify(envelope)), r.topic);
     await transport.publishSealed(r.topic, sealed).catch(() => {});
   }
 }

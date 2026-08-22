@@ -12,7 +12,16 @@
 //   contentTopic = "/kym/1/" + hex(topic(e)) + "/proto"
 //   Ke           = HKDF-SHA256(ikm=K, salt="", info="kym/payload/v1", 32)
 //   fingerprint  = pgpWords(SHA-256(K)[0..2])   (even/odd/even)
+//   nonce(id)    = HMAC-SHA256(Ke, "kym/nonce/v1|"+id)[0..11] (12B, DETERMINISTIC)
 //   wire payload = nonce(12) || ChaCha20-Poly1305(Ke, nonce, plaintext, aad=topic)
+//
+// This is a vendored, byte-parity copy of loam-sync's shared household crypto
+// (basecamp/logos_sync/crypto.ts, domain="kym") — Metro cannot bundle the
+// out-of-tree loam-sync package on an Expo export, so the phone carries an
+// identical implementation. The DETERMINISTIC id-derived nonce (ADR 0011) means
+// re-sealing an immutable event is byte-identical, so the fleet store dedups it
+// (fixes store bloat + the cold-start 2500-cap truncation). Parity with the
+// shared seal is locked by packages/sync/test (mobile-crypto-parity).
 //
 // NOTE (Phase 2): this file only DERIVES and displays the secret/topic/fingerprint
 // for the Pairing screen. It performs NO networking — seal/open/topic are provided
@@ -74,9 +83,22 @@ export function topicFor(id: Identity, epoch = 0): string {
   return `/kym/1/${hex(t)}/proto`;
 }
 
-/** Encrypt plaintext → nonce(12) ‖ ciphertext‖tag, AAD-bound to the topic. (Phase 3.) */
-export function seal(id: Identity, plaintext: Uint8Array, topic: string): Uint8Array {
-  const nonce = Crypto.getRandomBytes(12);
+/**
+ * Deterministic 12-byte nonce from the seal id (an immutable event's id, or a
+ * fresh token for a control frame). Same id → same nonce → same ciphertext.
+ */
+export function nonceFor(id: Identity, sealId: string): Uint8Array {
+  return hmac(sha256, id.Ke, enc(`kym/nonce/v1|${sealId}`)).slice(0, 12);
+}
+
+/**
+ * Encrypt plaintext → nonce(12) ‖ ciphertext‖tag, AAD-bound to the topic. The
+ * nonce is DERIVED from `sealId` (deterministic): pass the event id for an
+ * immutable event so a re-seal is byte-identical (the store dedups it); pass a
+ * fresh unique token for an ephemeral control frame.
+ */
+export function seal(id: Identity, sealId: string, plaintext: Uint8Array, topic: string): Uint8Array {
+  const nonce = nonceFor(id, sealId);
   const ct = chacha20poly1305(id.Ke, nonce, enc(topic)).encrypt(plaintext);
   const out = new Uint8Array(nonce.length + ct.length);
   out.set(nonce, 0);
