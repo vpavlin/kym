@@ -102,7 +102,7 @@ test("sealed payload is actually ciphertext (no plaintext leak)", () => {
   const id = deriveIdentity(newSecret());
   const topic = topicFor(id);
   const plaintext = encodeEvent(ev.assign({ wall: 1, ctr: 0, dev: "A" }, { categoryId: "groceries-secret", month: M, amount: 5000 }));
-  const sealed = seal(id, plaintext, topic);
+  const sealed = seal(id, "test-seal", plaintext, topic);
   const asText = Buffer.from(sealed).toString("latin1");
   assert.ok(!asText.includes("groceries-secret"), "category name must not appear in the ciphertext");
   assert.ok(!asText.includes("assign"), "event type must not appear in the ciphertext");

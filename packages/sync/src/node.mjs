@@ -27,7 +27,7 @@ export class SyncNode {
       this.log = mergeEvents([...this.log, event]);
       this._ids.add(event.id);
     }
-    return seal(this.id, encodeEvent(event), this.topic);
+    return seal(this.id, event.id, encodeEvent(event), this.topic);
   }
 
   /** Ingest one sealed message from the transport. Returns true if it was new.
@@ -44,6 +44,6 @@ export class SyncNode {
   /** Re-seal the whole log — module-side backfill for a peer that just joined
    *  (liblogosdelivery exposes no Store; the desktop hub re-serves on demand). */
   backfill() {
-    return this.log.map((e) => seal(this.id, encodeEvent(e), this.topic));
+    return this.log.map((e) => seal(this.id, e.id, encodeEvent(e), this.topic));
   }
 }
