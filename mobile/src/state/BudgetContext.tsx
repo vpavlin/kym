@@ -194,6 +194,7 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
       const settings = await loadSettings();
       if (!alive) return;
       clockRef.current = new Clock(dev);
+      clockRef.current.primeFrom(log);   // ADR 0013: seed HLC from the persisted log so a local edit sorts AFTER everything already held
       setDeviceId(dev);
       setBudgets(reg.budgets);
       setCurrentBudgetId(reg.current);
@@ -261,8 +262,19 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
   // callback registered once at mount. appendEvents returns the same array
   // reference when nothing new was added (dedup), so we only re-render on a change.
   const ingest = useCallback(async (incoming: KymEvent[]): Promise<KymEvent[]> => {
-    const next = await appendBudgetEvents(currentBudgetIdRef.current, eventsRef.current, incoming);
-    if (next !== eventsRef.current) {
+    const before = eventsRef.current;
+    const next = await appendBudgetEvents(currentBudgetIdRef.current, before, incoming);
+    if (next !== before) {
+      // ADR 0013: advance the clock past NEWLY-ingested REMOTE events so a
+      // subsequent local edit sorts after them (fixes silent LWW revert). Only
+      // new + non-local ids — re-received dupes must not bump the clock.
+      const clk = clockRef.current;
+      if (clk) {
+        const known = new Set(before.map((e) => e.id));
+        for (const e of incoming) {
+          if (e && e.hlc && e.hlc.dev !== deviceIdRef.current && !known.has(e.id)) clk.receive(e.hlc);
+        }
+      }
       eventsRef.current = next;
       setEvents(next);
     }

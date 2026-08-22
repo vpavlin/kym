@@ -34,6 +34,23 @@ export class Clock {
     return { wall: this.wall, ctr: this.ctr, dev: this.dev };
   }
 
+  /**
+   * Prime from an existing log at boot/join so the next `send()` sorts AFTER
+   * every event already held — without the per-event `+1` bump `receive()`
+   * applies (which would inflate ctr across a whole log). Observe-only: take the
+   * max (wall, ctr). Call once after loading the persisted log, and on join.
+   * @param {Array<{hlc?:HLC}>} log
+   */
+  primeFrom(log) {
+    for (const e of log || []) {
+      const h = e && e.hlc;
+      if (!h) continue;
+      if (h.wall > this.wall) { this.wall = h.wall; this.ctr = h.ctr; }
+      else if (h.wall === this.wall && h.ctr > this.ctr) { this.ctr = h.ctr; }
+    }
+    return this;
+  }
+
   /** Merge a received event's HLC into this clock before authoring anything after it. */
   receive(remote) {
     const t = this.now();
