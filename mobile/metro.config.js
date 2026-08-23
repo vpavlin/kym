@@ -67,6 +67,10 @@ config.resolver.nodeModulesPaths = [
 const cryptoShim = path.resolve(projectRoot, "shims/crypto.js");
 const contractSrc = path.resolve(packagesRoot, "contract/src");
 const engineSrc = path.resolve(packagesRoot, "engine/src");
+// loam-sync is an in-tree git submodule under packages/ (Metro-watched), shipped with a
+// built dist so the bare "loam-sync" specifier bundles as real .js — this is how kym USES
+// loam-sync (single source) on mobile instead of a vendored copy.
+const loamSyncDist = path.resolve(packagesRoot, "loam-sync/dist");
 
 const EXPLICIT = {
   "node:crypto": cryptoShim,
@@ -76,6 +80,8 @@ const EXPLICIT = {
   "@kym/contract/hlc": path.resolve(contractSrc, "hlc.mjs"),
   "@kym/contract/events": path.resolve(contractSrc, "events.mjs"),
   "@kym/engine": path.resolve(engineSrc, "index.mjs"),
+  "loam-sync": path.resolve(loamSyncDist, "index.js"),
+  "loam-sync/crypto": path.resolve(loamSyncDist, "crypto.js"),
 };
 
 const defaultResolveRequest = config.resolver.resolveRequest;
