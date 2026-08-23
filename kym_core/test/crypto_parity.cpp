@@ -30,9 +30,11 @@ int main() {
   Bytes opened = open(id, fromHex(f["sealed"]), f["topic"]);
   eq(toHex(opened), f["plaintext"], "open(TS sealed) == plaintext");
 
-  // re-seal with the same nonce -> identical ciphertext (encrypt parity)
-  Bytes resealed = seal(id, fromHex(f["plaintext"]), f["topic"], fromHex(f["nonce"]));
-  eq(toHex(resealed), f["sealed"], "seal(plaintext) == TS sealed");
+  // re-seal with the DETERMINISTIC id-derived nonce -> identical ciphertext (ADR 0011).
+  // nonceFor(id, eventId) must match the TS derivation, so the full sealed bytes match.
+  Bytes nonce = nonceFor(id, f["eventId"]);
+  Bytes resealed = seal(id, fromHex(f["plaintext"]), f["topic"], nonce);
+  eq(toHex(resealed), f["sealed"], "seal(plaintext, det-nonce) == TS sealed");
 
   std::cout << (fails ? "CRYPTO PARITY FAILED" : "CRYPTO PARITY OK")
             << " — " << (checks - fails) << "/" << checks << " checks\n";
