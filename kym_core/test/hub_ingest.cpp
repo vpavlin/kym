@@ -37,8 +37,8 @@ int main() {
   // Build an event with splits, a negative amount, a bool, and a UTF-8 memo.
   Event e;
   e.id = "t1"; e.type = "txn.create"; e.hlc = HLC{1784401737851LL, 0, "dev-A"};
-  e.s["accountId"] = "chk"; e.s["memo"] = "Kč café \"x\""; e.n["amount"] = -25000; e.b["approved"] = true;
-  e.hasSplits = true; e.splits = {{"groc", -15000}, {"home", -10000}};
+  e.payload["accountId"] = "chk"; e.payload["memo"] = "Kč café \"x\""; e.payload["amount"] = -25000; e.payload["approved"] = true;
+  e.payload["splits"] = {{{"categoryId", "groc"}, {"amount", -15000}}, {{"categoryId", "home"}, {"amount", -10000}}};
 
   // Seal it exactly as a peer would (fixed nonce for the test).
   Bytes nonce(12); for (int i = 0; i < 12; i++) nonce[i] = (uint8_t)(i + 3);
@@ -51,10 +51,10 @@ int main() {
   eqs(got.id, "t1", "1.id");
   eqs(got.type, "txn.create", "1.type");
   eqi(got.hlc.wall, 1784401737851LL, "1.wall");
-  eqs(got.s["memo"], "Kč café \"x\"", "1.memo-utf8+escape");
-  eqi(got.n["amount"], -25000, "1.amount");
-  ok(got.b["approved"], "1.approved");
-  ok(got.hasSplits && got.splits.size() == 2 && got.splits[1].amount == -10000, "1.splits");
+  eqs(got.payload["memo"], "Kč café \"x\"", "1.memo-utf8+escape");
+  eqi(got.payload["amount"], -25000, "1.amount");
+  ok(got.payload["approved"], "1.approved");
+  ok(got.payload.contains("splits") && got.payload["splits"].size() == 2 && got.payload["splits"][1].value("amount", (int64_t)0) == -10000, "1.splits");
 
   // 2. A different household key cannot open it (auth fails, no crash).
   Bytes other(32, 9);

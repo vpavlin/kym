@@ -23,40 +23,40 @@ static HLC h(const std::string& dev) { return HLC{T++, 0, dev}; }
 
 static Event acct(const std::string& id, const std::string& name, const std::string& type, Money bal, const std::string& date) {
   Event e; e.id = "e" + std::to_string(T); e.type = "account.create"; e.hlc = h("A");
-  e.s["accountId"] = id; e.s["name"] = name; e.s["accountType"] = type;
-  e.s["startDate"] = date; e.n["startingBalance"] = bal; e.b["onBudget"] = true; return e;
+  e.payload["accountId"] = id; e.payload["name"] = name; e.payload["accountType"] = type;
+  e.payload["startDate"] = date; e.payload["startingBalance"] = bal; e.payload["onBudget"] = true; return e;
 }
 static Event cat(const std::string& id, const std::string& name) {
   Event e; e.id = "e" + std::to_string(T); e.type = "category.create"; e.hlc = h("A");
-  e.s["categoryId"] = id; e.s["groupId"] = "g1"; e.s["name"] = name; return e;
+  e.payload["categoryId"] = id; e.payload["groupId"] = "g1"; e.payload["name"] = name; return e;
 }
 static Event assign(const std::string& c, const std::string& m, Money amt) {
   Event e; e.id = "e" + std::to_string(T); e.type = "assign"; e.hlc = h("A");
-  e.s["categoryId"] = c; e.s["month"] = m; e.n["amount"] = amt; e.s["mode"] = "delta"; return e;
+  e.payload["categoryId"] = c; e.payload["month"] = m; e.payload["amount"] = amt; e.payload["mode"] = "delta"; return e;
 }
 static Event mv(const std::string& f, const std::string& t, const std::string& m, Money amt) {
   Event e; e.id = "e" + std::to_string(T); e.type = "move"; e.hlc = h("A");
-  e.s["fromCategoryId"] = f; e.s["toCategoryId"] = t; e.s["month"] = m; e.n["amount"] = amt; return e;
+  e.payload["fromCategoryId"] = f; e.payload["toCategoryId"] = t; e.payload["month"] = m; e.payload["amount"] = amt; return e;
 }
 static Event txn(const std::string& id, const std::string& acc, Money amt, const std::string& date,
                  const std::string& category, const std::string& dev = "A") {
   Event e; e.id = "e" + std::to_string(T); e.type = "txn.create"; e.hlc = h(dev);
-  e.s["txnId"] = id; e.s["accountId"] = acc; e.n["amount"] = amt; e.s["date"] = date;
-  if (!category.empty()) e.s["categoryId"] = category; return e;
+  e.payload["txnId"] = id; e.payload["accountId"] = acc; e.payload["amount"] = amt; e.payload["date"] = date;
+  if (!category.empty()) e.payload["categoryId"] = category; return e;
 }
 
 // --- group-budget builders (author = hlc.dev) ---
 static Event assignBy(const std::string& dev, const std::string& c, const std::string& m, Money amt) {
   Event e; e.id = "e" + std::to_string(T); e.type = "assign"; e.hlc = h(dev);
-  e.s["categoryId"] = c; e.s["month"] = m; e.n["amount"] = amt; e.s["mode"] = "delta"; return e;
+  e.payload["categoryId"] = c; e.payload["month"] = m; e.payload["amount"] = amt; e.payload["mode"] = "delta"; return e;
 }
 static Event groupInit(const std::string& dev, const std::string& name) {
   Event e; e.id = "e" + std::to_string(T); e.type = "group.init"; e.hlc = h(dev);
-  e.s["name"] = name; e.s["founderId"] = dev; e.s["founderName"] = dev; return e;
+  e.payload["name"] = name; e.payload["founderId"] = dev; e.payload["founderName"] = dev; return e;
 }
 static Event memberAdd(const std::string& admin, const std::string& id, const std::string& role) {
   Event e; e.id = "e" + std::to_string(T); e.type = "member.add"; e.hlc = h(admin);
-  e.s["memberId"] = id; e.s["name"] = id; e.s["role"] = role; return e;
+  e.payload["memberId"] = id; e.payload["name"] = id; e.payload["role"] = role; return e;
 }
 
 static const std::string M = "2026-07";
@@ -115,8 +115,8 @@ int main() {
   // 4. splits fan out and must sum to parent
   {
     Event split; split.id = "s1"; split.type = "txn.create"; split.hlc = h("A");
-    split.s["txnId"] = "t1"; split.s["accountId"] = "chk"; split.n["amount"] = -30000; split.s["date"] = d();
-    split.hasSplits = true; split.splits = {{"groc", -18000}, {"home", -12000}};
+    split.payload["txnId"] = "t1"; split.payload["accountId"] = "chk"; split.payload["amount"] = -30000; split.payload["date"] = d();
+    split.payload["splits"] = {{{"categoryId", "groc"}, {"amount", -18000}}, {{"categoryId", "home"}, {"amount", -12000}}};
     std::vector<Event> ev = {
       acct("chk", "Checking", "checking", 100000, d()),
       cat("groc", "Groceries"), cat("home", "Household"),

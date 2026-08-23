@@ -185,77 +185,28 @@ inline std::string b64decode(const std::string &in) {
   return out;
 }
 
-// event -> plaintext bytes (JSON string) ready to seal. Payload keys are emitted
-// in a deterministic order (strings, numbers, bools, splits); decoders are
+// event -> plaintext bytes (JSON string) ready to seal. The event body comes
+// from logos_sync::eventToJson (v,id,type,hlc,dev,payload; pub/sig only if set),
+// wrapped in KYM's {v,type:"EVENT",event} envelope. The wire has always carried
+// event.dev == hlc.dev, so we stamp it from the HLC regardless of Event.dev.
+// nlohmann orders object keys, but every decoder here (C++, TS JSON.parse) is
 // key-order-independent, so this round-trips with the TS/Qt codecs.
 inline std::string encodeEventEnvelopeStd(const Event &e) {
-  std::string o;
-  o += "{\"v\":1,\"type\":\"EVENT\",\"event\":{\"v\":1,\"id\":";
-  json::escapeTo(e.id, o);
-  o += ",\"type\":"; json::escapeTo(e.type, o);
-  o += ",\"hlc\":{\"wall\":" + std::to_string(e.hlc.wall) +
-       ",\"ctr\":" + std::to_string(e.hlc.ctr) + ",\"dev\":";
-  json::escapeTo(e.hlc.dev, o);
-  o += "},\"dev\":"; json::escapeTo(e.hlc.dev, o);
-  o += ",\"payload\":{";
-  bool first = true;
-  auto comma = [&]() { if (!first) o.push_back(','); first = false; };
-  for (const auto &kv : e.s) { comma(); json::escapeTo(kv.first, o); o.push_back(':'); json::escapeTo(kv.second, o); }
-  for (const auto &kv : e.n) { comma(); json::escapeTo(kv.first, o); o.push_back(':'); o += std::to_string(kv.second); }
-  for (const auto &kv : e.b) { comma(); json::escapeTo(kv.first, o); o.push_back(':'); o += (kv.second ? "true" : "false"); }
-  if (e.hasSplits) {
-    comma(); o += "\"splits\":[";
-    for (size_t i = 0; i < e.splits.size(); i++) {
-      if (i) o.push_back(',');
-      o += "{\"categoryId\":"; json::escapeTo(e.splits[i].categoryId, o);
-      o += ",\"amount\":" + std::to_string(e.splits[i].amount) + "}";
-    }
-    o.push_back(']');
-  }
-  o += "}}}";
-  return o;
+  nlohmann::json ev = logos_sync::eventToJson(e);
+  ev["dev"] = e.hlc.dev;                       // wire dev == hlc.dev (kym contract)
+  nlohmann::json env = {{"v", 1}, {"type", "EVENT"}, {"event", ev}};
+  return env.dump();
 }
 
 // plaintext bytes (after open) -> event. Returns false on a non-EVENT envelope
-// or malformed JSON.
+// or malformed JSON. The opaque payload is carried through verbatim (numbers stay
+// integer milliunits, splits stay an array of {categoryId,amount}).
 inline bool decodeEventEnvelopeStd(const std::string &bytes, Event &out) {
-  bool ok = false;
-  json::Value env = json::parse(bytes, ok);
-  if (!ok || env.type != json::Value::Obj) return false;
-  const json::Value *type = env.find("type");
-  if (!type || type->type != json::Value::Str || type->str != "EVENT") return false;
-  const json::Value *ev = env.find("event");
-  if (!ev || ev->type != json::Value::Obj) return false;
-
-  Event e;
-  if (const auto *id = ev->find("id")) e.id = id->str;
-  if (const auto *t = ev->find("type")) e.type = t->str;
-  if (const auto *h = ev->find("hlc")) {
-    if (const auto *w = h->find("wall")) e.hlc.wall = w->asInt();
-    if (const auto *c = h->find("ctr")) e.hlc.ctr = c->asInt();
-    if (const auto *d = h->find("dev")) e.hlc.dev = d->str;
-  }
-  if (const auto *p = ev->find("payload")) {
-    for (const auto &kv : p->obj) {
-      const std::string &k = kv.first;
-      const json::Value &v = kv.second;
-      if (k == "splits" && v.type == json::Value::Arr) {
-        e.hasSplits = true;
-        for (const auto &s : v.arr) {
-          const auto *cid = s.find("categoryId");
-          const auto *amt = s.find("amount");
-          e.splits.push_back({ cid ? cid->str : std::string(), amt ? amt->asInt() : 0 });
-        }
-      } else if (v.type == json::Value::Num) {
-        e.n[k] = v.asInt();
-      } else if (v.type == json::Value::Bool) {
-        e.b[k] = v.b;
-      } else if (v.type == json::Value::Str) {
-        e.s[k] = v.str;
-      }
-    }
-  }
-  out = e;
+  nlohmann::json env = nlohmann::json::parse(bytes, nullptr, /*allow_exceptions=*/false);
+  if (env.is_discarded() || !env.is_object()) return false;
+  if (env.value("type", std::string()) != "EVENT") return false;
+  if (!env.contains("event") || !env["event"].is_object()) return false;
+  out = logos_sync::eventFromJson(env["event"]);
   return true;
 }
 

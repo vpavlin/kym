@@ -36,42 +36,42 @@ int main() {
   eqi(e.hlc.wall, 1784401737851LL, "1.wall");
   eqi(e.hlc.ctr, 0, "1.ctr");
   eqs(e.hlc.dev, "dev-A", "1.dev");
-  eqs(e.s["txnId"], "t1", "1.txnId");
-  eqs(e.s["accountId"], "chk", "1.accountId");
-  eqs(e.s["date"], "2026-07-15T12:00:00Z", "1.date");
-  eqs(e.s["cleared"], "uncleared", "1.cleared");
-  eqs(e.s["memo"], "Bought \"milk\" @ Kč — café", "1.memo(escapes+utf8)");
-  eqi(e.n["amount"], -25000, "1.amount");
-  ok(e.b["approved"] == true, "1.approved");
-  ok(e.hasSplits && e.splits.size() == 2, "1.splits-count");
-  eqs(e.splits[0].categoryId, "groc", "1.split0.cat");
-  eqi(e.splits[0].amount, -15000, "1.split0.amt");
-  eqs(e.splits[1].categoryId, "home", "1.split1.cat");
-  eqi(e.splits[1].amount, -10000, "1.split1.amt");
+  eqs(e.payload["txnId"], "t1", "1.txnId");
+  eqs(e.payload["accountId"], "chk", "1.accountId");
+  eqs(e.payload["date"], "2026-07-15T12:00:00Z", "1.date");
+  eqs(e.payload["cleared"], "uncleared", "1.cleared");
+  eqs(e.payload["memo"], "Bought \"milk\" @ Kč — café", "1.memo(escapes+utf8)");
+  eqi(e.payload["amount"], -25000, "1.amount");
+  ok(e.payload["approved"] == true, "1.approved");
+  ok(e.payload.contains("splits") && e.payload["splits"].size() == 2, "1.splits-count");
+  eqs(e.payload["splits"][0].value("categoryId", std::string()), "groc", "1.split0.cat");
+  eqi(e.payload["splits"][0].value("amount", (int64_t)0), -15000, "1.split0.amt");
+  eqs(e.payload["splits"][1].value("categoryId", std::string()), "home", "1.split1.cat");
+  eqi(e.payload["splits"][1].value("amount", (int64_t)0), -10000, "1.split1.amt");
 
   // 2. Round-trip: encode the decoded event, decode again, assert identical.
   Event e2;
   ok(decodeEventEnvelopeStd(encodeEventEnvelopeStd(e), e2), "2.roundtrip-decode");
   eqs(e2.id, e.id, "2.id");
   eqi(e2.hlc.wall, e.hlc.wall, "2.wall");
-  eqs(e2.s["memo"], e.s["memo"], "2.memo");
-  eqi(e2.n["amount"], e.n["amount"], "2.amount");
-  ok(e2.b["approved"] == e.b["approved"], "2.approved");
-  ok(e2.splits.size() == 2 && e2.splits[1].amount == -10000, "2.splits");
+  eqs(e2.payload["memo"], e.payload["memo"], "2.memo");
+  eqi(e2.payload["amount"], e.payload["amount"], "2.amount");
+  ok(e2.payload["approved"] == e.payload["approved"], "2.approved");
+  ok(e2.payload["splits"].size() == 2 && e2.payload["splits"][1].value("amount", (int64_t)0) == -10000, "2.splits");
 
   // 3. Build a fresh event by hand, encode -> decode, assert lossless.
   Event f;
   f.id = "f1"; f.type = "assign"; f.hlc = HLC{9007199254740000LL, 3, "dev-B"};
-  f.s["categoryId"] = "groc"; f.s["month"] = "2026-08"; f.s["mode"] = "delta";
-  f.n["amount"] = 30000; f.b["approved"] = false;
+  f.payload["categoryId"] = "groc"; f.payload["month"] = "2026-08"; f.payload["mode"] = "delta";
+  f.payload["amount"] = 30000; f.payload["approved"] = false;
   Event f2;
   ok(decodeEventEnvelopeStd(encodeEventEnvelopeStd(f), f2), "3.decode");
   eqs(f2.type, "assign", "3.type");
   eqi(f2.hlc.wall, 9007199254740000LL, "3.bigwall");
   eqi(f2.hlc.ctr, 3, "3.ctr");
-  eqi(f2.n["amount"], 30000, "3.amount");
-  ok(f2.b["approved"] == false, "3.approved-false");
-  ok(!f2.hasSplits, "3.no-splits");
+  eqi(f2.payload["amount"], 30000, "3.amount");
+  ok(f2.payload["approved"] == false, "3.approved-false");
+  ok(!f2.payload.contains("splits"), "3.no-splits");
 
   // 4. Non-EVENT envelope is rejected.
   Event g;

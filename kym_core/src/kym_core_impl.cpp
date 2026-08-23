@@ -68,7 +68,7 @@ std::string ymd() {  // YYYY-MM-DD (UTC)
     return b;
 }
 kym::Event baseEvent(const std::string &type, const kym::HLC &hlc) {
-    kym::Event e; e.id = uuidHex(); e.type = type; e.hlc = hlc; return e;
+    kym::Event e; e.id = uuidHex(); e.type = type; e.hlc = hlc; e.dev = hlc.dev; return e;
 }
 std::string money(kym::Money m, const std::string &ccy) { return kym::formatMoney(m, ccy); }
 bool ciEq(const std::string &a, const std::string &b) {
@@ -204,7 +204,7 @@ std::string KymCoreImpl::ensureGroup(const std::string &name) {
     for (auto &kv : cur().groupName) if (ciEq(kv.second, name)) return kv.first;
     std::string gid = "grp:" + slug(name);
     auto e = baseEvent("group.create", nextHlc());
-    e.s["groupId"] = gid; e.s["name"] = name;
+    e.payload["groupId"] = gid; e.payload["name"] = name;
     pushEvent(e, true);
     cur().groupName[gid] = name; cur().groupOrder.push_back(gid);
     return gid;
@@ -214,9 +214,9 @@ std::string KymCoreImpl::addAccountEv(const std::string &name, const std::string
     std::string ccy = currency.empty() ? cur().currency : currency;
     for (auto &c : ccy) c = std::toupper(c);
     auto e = baseEvent("account.create", nextHlc());
-    e.s["accountId"] = id; e.s["name"] = name; e.s["accountType"] = type;
-    e.s["startDate"] = ymd(); e.s["currency"] = ccy;
-    e.n["startingBalance"] = bal; e.b["onBudget"] = (type != "tracking");
+    e.payload["accountId"] = id; e.payload["name"] = name; e.payload["accountType"] = type;
+    e.payload["startDate"] = ymd(); e.payload["currency"] = ccy;
+    e.payload["startingBalance"] = bal; e.payload["onBudget"] = (type != "tracking");
     pushEvent(e, true);
     cur().accountName[id] = name; cur().accountCurrency[id] = ccy;
     return id;
@@ -225,26 +225,26 @@ std::string KymCoreImpl::addCategoryEv(const std::string &name, const std::strin
     std::string gid = ensureGroup(group.empty() ? "General" : group);
     std::string id = "cat:" + slug(name);
     auto e = baseEvent("category.create", nextHlc());
-    e.s["categoryId"] = id; e.s["groupId"] = gid; e.s["name"] = name;
+    e.payload["categoryId"] = id; e.payload["groupId"] = gid; e.payload["name"] = name;
     pushEvent(e, true);
     cur().categoryName[id] = name; cur().categoryGroup[id] = gid;
     return id;
 }
 void KymCoreImpl::assignEv(const std::string &catId, const std::string &month, kym::Money amt) {
     auto e = baseEvent("assign", nextHlc());
-    e.s["categoryId"] = catId; e.s["month"] = month; e.s["mode"] = "delta"; e.n["amount"] = amt;
+    e.payload["categoryId"] = catId; e.payload["month"] = month; e.payload["mode"] = "delta"; e.payload["amount"] = amt;
     pushEvent(e, true);
 }
 void KymCoreImpl::moveEv(const std::string &fromId, const std::string &toId, const std::string &month, kym::Money amt) {
     auto e = baseEvent("move", nextHlc());
-    e.s["fromCategoryId"] = fromId; e.s["toCategoryId"] = toId; e.s["month"] = month; e.n["amount"] = amt;
+    e.payload["fromCategoryId"] = fromId; e.payload["toCategoryId"] = toId; e.payload["month"] = month; e.payload["amount"] = amt;
     pushEvent(e, true);
 }
 void KymCoreImpl::txnEv(const std::string &acctId, kym::Money amt, const std::string &month, const std::string &catId) {
     auto e = baseEvent("txn.create", nextHlc());
-    e.s["txnId"] = uuidHex(); e.s["accountId"] = acctId; e.n["amount"] = amt;
-    e.s["date"] = month + "-15T12:00:00Z";
-    if (!catId.empty()) e.s["categoryId"] = catId;
+    e.payload["txnId"] = uuidHex(); e.payload["accountId"] = acctId; e.payload["amount"] = amt;
+    e.payload["date"] = month + "-15T12:00:00Z";
+    if (!catId.empty()) e.payload["categoryId"] = catId;
     pushEvent(e, true);
 }
 std::string KymCoreImpl::findAccountId(const std::string &name) const {
@@ -279,15 +279,15 @@ std::string KymCoreImpl::deleteCategory(std::string name) {
     // then would orphan money and break the zero-based invariant.
     for (const auto &e : cur().log) {
         bool refs = false;
-        if (e.type == "assign" && e.s.count("categoryId") && e.s.at("categoryId") == cid) refs = true;
-        else if (e.type == "move" && ((e.s.count("fromCategoryId") && e.s.at("fromCategoryId") == cid) ||
-                                      (e.s.count("toCategoryId") && e.s.at("toCategoryId") == cid))) refs = true;
-        else if (e.type == "txn.create" && e.s.count("categoryId") && e.s.at("categoryId") == cid) refs = true;
-        for (const auto &sp : e.splits) if (sp.categoryId == cid) refs = true;
+        if (e.type == "assign" && e.payload.contains("categoryId") && e.payload.at("categoryId") == cid) refs = true;
+        else if (e.type == "move" && ((e.payload.contains("fromCategoryId") && e.payload.at("fromCategoryId") == cid) ||
+                                      (e.payload.contains("toCategoryId") && e.payload.at("toCategoryId") == cid))) refs = true;
+        else if (e.type == "txn.create" && e.payload.contains("categoryId") && e.payload.at("categoryId") == cid) refs = true;
+        if (e.payload.contains("splits")) for (const auto &sp : e.payload.at("splits")) if (sp.value("categoryId", std::string()) == cid) refs = true;
         if (refs) return "\"" + name + "\" has money or transactions — move them out first";
     }
     auto ev = baseEvent("category.delete", nextHlc());
-    ev.s["categoryId"] = cid;
+    ev.payload["categoryId"] = cid;
     pushEvent(ev, true);
     publishBudget(); return m_budgetJson;
 }
@@ -298,7 +298,7 @@ std::string KymCoreImpl::deleteGroup(std::string name) {
     if (gid.empty()) return "unknown group: " + name;
     for (auto &kv : cur().categoryGroup) if (kv.second == gid) return "\"" + name + "\" still has categories — delete them first";
     auto ev = baseEvent("group.delete", nextHlc());
-    ev.s["groupId"] = gid;
+    ev.payload["groupId"] = gid;
     pushEvent(ev, true);
     publishBudget(); return m_budgetJson;
 }
@@ -312,7 +312,7 @@ std::string KymCoreImpl::archiveCategory(std::string name) {
     if (avail != 0) return "\"" + name + "\" still holds " + money(avail, cur().currency) +
                            " — move it to Ready to Assign (or another category) first, then archive";
     auto ev = baseEvent("category.archive", nextHlc());
-    ev.s["categoryId"] = cid;
+    ev.payload["categoryId"] = cid;
     pushEvent(ev, true);
     publishBudget(); return m_budgetJson;
 }
@@ -321,7 +321,7 @@ std::string KymCoreImpl::unarchiveCategory(std::string name) {
     std::string cid = findCategoryId(name);
     if (cid.empty()) return "unknown category: " + name;
     auto ev = baseEvent("category.unarchive", nextHlc());
-    ev.s["categoryId"] = cid;
+    ev.payload["categoryId"] = cid;
     pushEvent(ev, true);
     publishBudget(); return m_budgetJson;
 }
@@ -347,33 +347,33 @@ std::string KymCoreImpl::editTxn(std::string txnId, std::string patchJson) {
     // merge once the create lands — the fold is order-independent by design.
     std::string curCat;
     for (const auto &e : cur().log) {
-        if (!e.s.count("txnId") || e.s.at("txnId") != txnId) continue;
-        if ((e.type == "txn.create" || e.type == "txn.edit") && e.s.count("categoryId"))
-            curCat = e.s.at("categoryId");
+        if (!e.payload.contains("txnId") || e.payload.at("txnId") != txnId) continue;
+        if ((e.type == "txn.create" || e.type == "txn.edit") && e.payload.contains("categoryId"))
+            curCat = e.payload.at("categoryId");
     }
 
     // A txn.edit carries ONLY the changed keys — the fold applies key-by-key, so
     // an untouched field keeps its last value even if another device edited it.
     auto ev = baseEvent("txn.edit", nextHlc());
-    ev.s["txnId"] = txnId;
+    ev.payload["txnId"] = txnId;
     bool toIncome = (curCat == kym::RTA_INFLOW);
     if (!category.empty()) {
-        if (ciEq(category, "Income")) { ev.s["categoryId"] = kym::RTA_INFLOW; toIncome = true; }
+        if (ciEq(category, "Income")) { ev.payload["categoryId"] = kym::RTA_INFLOW; toIncome = true; }
         else {
             std::string cid = findCategoryId(category);
             if (cid.empty()) return "unknown category: " + category;
-            ev.s["categoryId"] = cid; toIncome = false;
+            ev.payload["categoryId"] = cid; toIncome = false;
         }
     }
     if (!account.empty()) {
         std::string acc = findAccountId(account);
         if (acc.empty()) return "unknown account: " + account;
-        ev.s["accountId"] = acc;
+        ev.payload["accountId"] = acc;
     }
-    if (!date.empty()) ev.s["date"] = date.size() == 10 ? date + "T12:00:00Z" : date;
+    if (!date.empty()) ev.payload["date"] = date.size() == 10 ? date + "T12:00:00Z" : date;
     if (!amount.empty()) {
         long long m = std::llabs(toMilli(amount));
-        ev.n["amount"] = toIncome ? m : -m;   // expenses stay negative, income positive
+        ev.payload["amount"] = toIncome ? m : -m;   // expenses stay negative, income positive
     }
     pushEvent(ev, true);
     publishBudget(); return m_budgetJson;
@@ -400,7 +400,7 @@ std::string KymCoreImpl::deleteTxn(std::string txnId) {
     // Sticky tombstone: the fold sets deleted=true and never clears it, so a
     // concurrent edit can't resurrect a deleted txn (delete is terminal).
     auto ev = baseEvent("txn.delete", nextHlc());
-    ev.s["txnId"] = txnId;
+    ev.payload["txnId"] = txnId;
     pushEvent(ev, true);
     publishBudget(); return m_budgetJson;
 }
@@ -427,8 +427,8 @@ std::string KymCoreImpl::setTarget(std::string category, std::string targetType,
     std::string cat = findCategoryId(category);
     if (cat.empty()) return "unknown category: " + category;
     auto e = baseEvent("category.target", nextHlc());
-    e.s["categoryId"] = cat; e.s["targetType"] = targetType; e.n["amount"] = toMilli(amount);
-    if (!month.empty()) e.s["targetMonth"] = month;
+    e.payload["categoryId"] = cat; e.payload["targetType"] = targetType; e.payload["amount"] = toMilli(amount);
+    if (!month.empty()) e.payload["targetMonth"] = month;
     pushEvent(e, true); publishBudget(); return m_budgetJson;
 }
 std::string KymCoreImpl::reconcile(std::string account, std::string actual) {
@@ -458,7 +458,7 @@ std::string KymCoreImpl::adminGuard() {
 std::string KymCoreImpl::groupInit(std::string name) {
     if (kym::computeState(cur().log).isGroup) return "this budget is already a group";
     auto e = baseEvent("group.init", nextHlc());
-    e.s["name"] = name.empty() ? "Household" : name; e.s["founderId"] = m_deviceId; e.s["founderName"] = m_deviceId;
+    e.payload["name"] = name.empty() ? "Household" : name; e.payload["founderId"] = m_deviceId; e.payload["founderName"] = m_deviceId;
     pushEvent(e, true); publishBudget(); return m_budgetJson;
 }
 std::string KymCoreImpl::addMember(std::string memberId, std::string name, std::string role) {
@@ -467,7 +467,7 @@ std::string KymCoreImpl::addMember(std::string memberId, std::string name, std::
     if (r != "admin" && r != "editor" && r != "viewer") return "role must be admin|editor|viewer";
     std::string g = adminGuard(); if (!g.empty()) return g;
     auto e = baseEvent("member.add", nextHlc());
-    e.s["memberId"] = memberId; e.s["name"] = name.empty() ? memberId : name; e.s["role"] = r;
+    e.payload["memberId"] = memberId; e.payload["name"] = name.empty() ? memberId : name; e.payload["role"] = r;
     pushEvent(e, true); publishBudget(); return m_budgetJson;
 }
 std::string KymCoreImpl::setMemberRole(std::string memberId, std::string role) {
@@ -475,13 +475,13 @@ std::string KymCoreImpl::setMemberRole(std::string memberId, std::string role) {
     if (r != "admin" && r != "editor" && r != "viewer") return "role must be admin|editor|viewer";
     std::string g = adminGuard(); if (!g.empty()) return g;
     auto e = baseEvent("member.role", nextHlc());
-    e.s["memberId"] = memberId; e.s["role"] = r;
+    e.payload["memberId"] = memberId; e.payload["role"] = r;
     pushEvent(e, true); publishBudget(); return m_budgetJson;
 }
 std::string KymCoreImpl::removeMember(std::string memberId) {
     std::string g = adminGuard(); if (!g.empty()) return g;
     auto e = baseEvent("member.remove", nextHlc());
-    e.s["memberId"] = memberId;
+    e.payload["memberId"] = memberId;
     pushEvent(e, true); publishBudget(); return m_budgetJson;
 }
 
@@ -520,7 +520,7 @@ std::string KymCoreImpl::logFingerprint() {
 // ---- name maps + budget JSON ----------------------------------------------
 void KymCoreImpl::rebuildNameMaps() {
     auto sv = [](const kym::Event &e, const char *k) -> std::string {
-        auto it = e.s.find(k); return it == e.s.end() ? std::string() : it->second;
+        return e.payload.contains(k) ? e.payload.value(k, std::string()) : std::string();
     };
     cur().accountName.clear(); cur().categoryName.clear(); cur().groupName.clear();
     cur().categoryGroup.clear(); cur().accountCurrency.clear(); cur().groupOrder.clear();
@@ -616,10 +616,10 @@ void KymCoreImpl::publishBudget() {
     // can be deleted outright. The view uses canDelete to pick delete vs archive.
     std::set<std::string> catsWithHistory;
     for (const auto &e : cur().log) {
-        if (e.type == "assign" && e.s.count("categoryId")) catsWithHistory.insert(e.s.at("categoryId"));
-        else if (e.type == "move") { if (e.s.count("fromCategoryId")) catsWithHistory.insert(e.s.at("fromCategoryId")); if (e.s.count("toCategoryId")) catsWithHistory.insert(e.s.at("toCategoryId")); }
-        else if (e.type == "txn.create" && e.s.count("categoryId")) catsWithHistory.insert(e.s.at("categoryId"));
-        for (const auto &sp : e.splits) catsWithHistory.insert(sp.categoryId);
+        if (e.type == "assign" && e.payload.contains("categoryId")) catsWithHistory.insert(e.payload.at("categoryId"));
+        else if (e.type == "move") { if (e.payload.contains("fromCategoryId")) catsWithHistory.insert(e.payload.at("fromCategoryId")); if (e.payload.contains("toCategoryId")) catsWithHistory.insert(e.payload.at("toCategoryId")); }
+        else if (e.type == "txn.create" && e.payload.contains("categoryId")) catsWithHistory.insert(e.payload.at("categoryId"));
+        if (e.payload.contains("splits")) for (const auto &sp : e.payload.at("splits")) catsWithHistory.insert(sp.value("categoryId", std::string()));
     }
     json groups = json::array();
     for (const auto &gid : cur().groupOrder) {
@@ -712,14 +712,14 @@ void KymCoreImpl::publishBudget() {
         struct Tx { std::string date, acctId, catId, author; long long amount = 0; bool del = false, seen = false; };
         std::map<std::string, Tx> txs; std::vector<std::string> order;
         auto apply = [](Tx &t, const kym::Event &e) {
-            if (e.s.count("date")) t.date = e.s.at("date");
-            if (e.s.count("accountId")) t.acctId = e.s.at("accountId");
-            if (e.s.count("categoryId")) t.catId = e.s.at("categoryId");
-            if (e.s.count("author")) t.author = e.s.at("author");   // last device to touch it
-            if (e.n.count("amount")) t.amount = (long long)e.n.at("amount");
+            if (e.payload.contains("date")) t.date = e.payload.at("date");
+            if (e.payload.contains("accountId")) t.acctId = e.payload.at("accountId");
+            if (e.payload.contains("categoryId")) t.catId = e.payload.at("categoryId");
+            if (e.payload.contains("author")) t.author = e.payload.at("author");   // last device to touch it
+            if (e.payload.contains("amount")) t.amount = (long long)e.payload.at("amount");
         };
         for (const auto &e : cur().log) {
-            const std::string id = e.s.count("txnId") ? e.s.at("txnId") : e.id;
+            const std::string id = e.payload.value("txnId", e.id);
             if (e.type == "txn.create") { Tx &t = txs[id]; if (!t.seen) { t.seen = true; order.push_back(id); } apply(t, e); }
             else if (e.type == "txn.edit" && txs.count(id)) apply(txs[id], e);
             else if (e.type == "txn.delete" && txs.count(id)) txs[id].del = true;
@@ -743,10 +743,7 @@ void KymCoreImpl::publishBudget() {
         json evs = json::array();
         for (size_t i = cur().log.size(); i-- > 0; ) {
             const auto &e = cur().log[i];
-            json p = json::object();
-            for (auto &kv : e.s) p[kv.first] = kv.second;
-            for (auto &kv : e.n) p[kv.first] = (double)kv.second;
-            for (auto &kv : e.b) p[kv.first] = kv.second;
+            json p = e.payload.is_object() ? e.payload : json::object();  // opaque payload, flattened for the debug panel
             evs.push_back({ {"seq", (int)i}, {"type", e.type}, {"wall", (double)e.hlc.wall},
                             {"dev", e.hlc.dev}, {"id", e.id}, {"payload", p} });
         }
@@ -785,7 +782,7 @@ void KymCoreImpl::pushEvent(const kym::Event &e0, bool broadcast) {
     // affect dedup. Only locally-authored events flow through pushEvent; received
     // ones keep the sender's author via ingestRaw.
     kym::Event e = e0;
-    if (!m_authorName.empty() && !e.s.count("author")) e.s["author"] = m_authorName;
+    if (!m_authorName.empty() && !e.payload.contains("author")) e.payload["author"] = m_authorName;
     // Multi-instance safety: Basecamp can run more than one kym_core instance
     // behind a ui plugin (distinct LOGOS_INSTANCE_IDs). They share the on-disk
     // log; merge it in BEFORE appending so a stale in-memory instance can't
@@ -1478,12 +1475,12 @@ std::string KymCoreImpl::snapshot() {
     if (cur().seedTicks > 0 && m_nodeReady && !cur().seedCatId.empty()) {
         std::string gid;
         for (auto &e : cur().log)
-            if (e.type == "category.create" && e.s.count("categoryId") && e.s["categoryId"] == cur().seedCatId) {
-                if (e.s.count("groupId")) gid = e.s["groupId"];
+            if (e.type == "category.create" && e.payload.contains("categoryId") && e.payload["categoryId"] == cur().seedCatId) {
+                if (e.payload.contains("groupId")) gid = e.payload["groupId"];
                 sealAndSend(cur(), e);
             }
         for (auto &e : cur().log)
-            if (!gid.empty() && e.type == "group.create" && e.s.count("groupId") && e.s["groupId"] == gid)
+            if (!gid.empty() && e.type == "group.create" && e.payload.contains("groupId") && e.payload["groupId"] == gid)
                 sealAndSend(cur(), e);
         cur().seedTicks--;
         fprintf(stderr, "KYM hub seed re-broadcast (%d left) cat=%s grp=%s\n",

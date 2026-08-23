@@ -18,7 +18,10 @@ logos_module(
         src/kym_engine.hpp
         src/kym_crypto.hpp
         src/kym_wire_std.hpp
-        src/kym_reconcile_std.hpp
+        src/logos_sync/event.hpp
+        src/logos_sync/merge.hpp
+        src/logos_sync/reconcile.hpp
+        src/logos_sync/catchup.hpp
         src/money_format.hpp
         src/pgp_words.h
         src/qrcodegen.hpp

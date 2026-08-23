@@ -8,11 +8,12 @@
 //   g++ -std=c++17 -I../src hub_sync.cpp -lcrypto -o hub_sync && ./hub_sync
 #include "../src/kym_crypto.hpp"
 #include "../src/kym_wire_std.hpp"
-#include "../src/kym_reconcile_std.hpp"
+#include "../src/logos_sync/reconcile.hpp"
 #include "../src/kym_engine.hpp"
 #include <iostream>
 #include <map>
 
+namespace kym { namespace rbsr = logos_sync::rbsr; }   // reconciler now lives in logos_sync
 using namespace kym;
 static int failures = 0, checks = 0;
 static void eqi(int64_t g, int64_t w, const std::string &what) {
@@ -64,21 +65,21 @@ struct Peer {
 static int64_t T = 1000000;
 static Event acct(const std::string &id, Money bal) {
   Event e; e.id = id; e.type = "account.create"; e.hlc = {T++, 0, "base"};
-  e.s["accountId"] = id; e.s["name"] = id; e.s["accountType"] = "checking";
-  e.s["startDate"] = "2026-07-01T00:00:00Z"; e.n["startingBalance"] = bal; e.b["onBudget"] = true; return e;
+  e.payload["accountId"] = id; e.payload["name"] = id; e.payload["accountType"] = "checking";
+  e.payload["startDate"] = "2026-07-01T00:00:00Z"; e.payload["startingBalance"] = bal; e.payload["onBudget"] = true; return e;
 }
 static Event cat(const std::string &id) {
   Event e; e.id = id; e.type = "category.create"; e.hlc = {T++, 0, "base"};
-  e.s["categoryId"] = id; e.s["groupId"] = "g1"; e.s["name"] = id; return e;
+  e.payload["categoryId"] = id; e.payload["groupId"] = "g1"; e.payload["name"] = id; return e;
 }
 static Event assign(const std::string &id, const std::string &c, Money amt) {
   Event e; e.id = id; e.type = "assign"; e.hlc = {T++, 0, "base"};
-  e.s["categoryId"] = c; e.s["month"] = "2026-07"; e.n["amount"] = amt; e.s["mode"] = "delta"; return e;
+  e.payload["categoryId"] = c; e.payload["month"] = "2026-07"; e.payload["amount"] = amt; e.payload["mode"] = "delta"; return e;
 }
 static Event txn(const std::string &id, Money amt, const std::string &c, const std::string &dev) {
   Event e; e.id = id; e.type = "txn.create"; e.hlc = {T++, 0, dev};
-  e.s["txnId"] = id; e.s["accountId"] = "chk"; e.n["amount"] = amt;
-  e.s["date"] = "2026-07-10T00:00:00Z"; e.s["categoryId"] = c; return e;
+  e.payload["txnId"] = id; e.payload["accountId"] = "chk"; e.payload["amount"] = amt;
+  e.payload["date"] = "2026-07-10T00:00:00Z"; e.payload["categoryId"] = c; return e;
 }
 
 int main() {

@@ -10,7 +10,12 @@ class QTimer;
 #include "kym_engine.hpp"
 #include "kym_crypto.hpp"
 #include "kym_wire_std.hpp"
-#include "kym_reconcile_std.hpp"
+#include "logos_sync/reconcile.hpp"   // RBSR set reconciliation (vendored; was kym_reconcile_std.hpp)
+
+// The reconciler now lives in logos_sync (lifted verbatim from KYM's original
+// kym_reconcile_std.hpp). Alias it back into kym:: so call sites keep using
+// kym::rbsr::{Item,Diff,reconcile,fingerprint} unchanged.
+namespace kym { namespace rbsr = logos_sync::rbsr; }
 
 /**
  * KymCoreImpl - the KYM engine + sync as a headless Logos CORE module. It owns the
