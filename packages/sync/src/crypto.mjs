@@ -2,7 +2,7 @@
 // Domain="kym" reproduces the exact legacy key schedule (K/Ke/topic byte-identical), and the
 // nonce is DERIVED from the event id (deterministic) — a re-sealed immutable event is
 // byte-identical, so the fleet store dedups it (fixes store bloat + cold-start truncation).
-import * as L from "loam-sync/src/crypto.ts";
+import * as L from "loam-sync/crypto";
 import { randomBytes as nodeRandomBytes } from "node:crypto";
 
 const DOMAIN = "kym";
