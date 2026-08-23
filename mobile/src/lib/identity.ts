@@ -27,38 +27,26 @@
 // for the Pairing screen. It performs NO networking — seal/open/topic are provided
 // so that Phase 3 (issue #4, liblogosdelivery) can wire Delivery without touching
 // the crypto. The household secret itself is real, full-entropy, and usable.
-import { hkdf } from "@noble/hashes/hkdf.js";
-import { hmac } from "@noble/hashes/hmac.js";
 import { sha256 } from "@noble/hashes/sha2.js";
-import { chacha20poly1305 } from "@noble/ciphers/chacha.js";
 import * as Crypto from "expo-crypto";
 import { PGP_EVEN, PGP_ODD } from "./pgpWords";
+import {
+  deriveIdentity as LDerive,
+  topicFor as LTopic,
+  nonceFor as LNonce,
+  seal as LSeal,
+  open as LOpen,
+  type Identity as LIdentity,
+} from "loam-sync/crypto";
 
-const enc = (s: string): Uint8Array => {
-  const out: number[] = [];
-  for (let i = 0; i < s.length; i++) {
-    const c = s.charCodeAt(i);
-    if (c < 0x80) out.push(c);
-    else if (c < 0x800) out.push(0xc0 | (c >> 6), 0x80 | (c & 0x3f));
-    else out.push(0xe0 | (c >> 12), 0x80 | ((c >> 6) & 0x3f), 0x80 | (c & 0x3f));
-  }
-  return new Uint8Array(out);
-};
-
-const SALT_PAIR = enc("kym-pair-v1");
-const INFO_PAYLOAD = enc("kym/payload/v1");
-const HEX = "0123456789abcdef";
-const hex = (b: Uint8Array): string => {
-  let s = "";
-  for (const x of b) s += HEX[x >> 4] + HEX[x & 15];
-  return s;
-};
+const KYM = "kym"; // household crypto domain
 
 /** A household identity: the raw secret plus everything derived from it. */
-export interface Identity {
-  secret: Uint8Array; // S, 32 bytes
-  K: Uint8Array; // master derived key
-  Ke: Uint8Array; // payload encryption key
+// The household crypto (derive/topic/nonce/seal/open) is now loam-sync's — imported
+// from the in-tree loam-sync submodule (single source), NOT a kym copy. domain="kym"
+// reproduces the exact legacy key schedule. Only the pgp-word fingerprint + pairing
+// codec below stay kym-specific (UI/UX, not crypto).
+export interface Identity extends LIdentity {
   fingerprint: string[]; // 3 pgp words, shown on every device to confirm the pairing
 }
 
@@ -67,51 +55,28 @@ export function newSecret(): Uint8Array {
   return Crypto.getRandomBytes(32);
 }
 
-/** Derive the full identity from a 32-byte secret. Pure; no I/O. */
+/** Derive the full identity from a 32-byte secret (loam-sync, domain "kym") + the
+ *  kym pgp-word fingerprint. Pure; no I/O. */
 export function deriveIdentity(secret: Uint8Array): Identity {
   if (secret.length !== 32) throw new Error("kym household secret must be 32 bytes");
-  const K = hkdf(sha256, secret, SALT_PAIR, new Uint8Array(0), 32);
-  const Ke = hkdf(sha256, K, new Uint8Array(0), INFO_PAYLOAD, 32);
-  const fp = sha256(K).slice(0, 3);
-  const fingerprint = [PGP_EVEN[fp[0]], PGP_ODD[fp[1]], PGP_EVEN[fp[2]]];
-  return { secret, K, Ke, fingerprint };
+  const id = LDerive(secret, KYM);
+  const fp = sha256(id.K).slice(0, 3);
+  return { ...id, fingerprint: [PGP_EVEN[fp[0]], PGP_ODD[fp[1]], PGP_EVEN[fp[2]]] };
 }
 
 /** The household content topic for a rotation epoch (default 0 = static, phase 1). */
-export function topicFor(id: Identity, epoch = 0): string {
-  const t = hmac(sha256, id.K, enc(`kym/topic/v1|${epoch}`)).slice(0, 16);
-  return `/kym/1/${hex(t)}/proto`;
-}
+export const topicFor = (id: Identity, epoch = 0): string => LTopic(id, KYM, epoch);
 
-/**
- * Deterministic 12-byte nonce from the seal id (an immutable event's id, or a
- * fresh token for a control frame). Same id → same nonce → same ciphertext.
- */
-export function nonceFor(id: Identity, sealId: string): Uint8Array {
-  return hmac(sha256, id.Ke, enc(`kym/nonce/v1|${sealId}`)).slice(0, 12);
-}
+/** Deterministic 12-byte nonce from the seal id (loam-sync, domain "kym"). */
+export const nonceFor = (id: Identity, sealId: string): Uint8Array => LNonce(id, KYM, sealId);
 
-/**
- * Encrypt plaintext → nonce(12) ‖ ciphertext‖tag, AAD-bound to the topic. The
- * nonce is DERIVED from `sealId` (deterministic): pass the event id for an
- * immutable event so a re-seal is byte-identical (the store dedups it); pass a
- * fresh unique token for an ephemeral control frame.
- */
-export function seal(id: Identity, sealId: string, plaintext: Uint8Array, topic: string): Uint8Array {
-  const nonce = nonceFor(id, sealId);
-  const ct = chacha20poly1305(id.Ke, nonce, enc(topic)).encrypt(plaintext);
-  const out = new Uint8Array(nonce.length + ct.length);
-  out.set(nonce, 0);
-  out.set(ct, nonce.length);
-  return out;
-}
+/** Encrypt → nonce(12)‖ciphertext‖tag, AAD-bound to the topic; deterministic nonce
+ *  from `sealId` (loam-sync seal, domain "kym"). */
+export const seal = (id: Identity, sealId: string, plaintext: Uint8Array, topic: string): Uint8Array =>
+  LSeal(id, KYM, sealId, plaintext, topic);
 
-/** Inverse of seal(). Throws if the tag doesn't verify. (Phase 3.) */
-export function open(id: Identity, sealed: Uint8Array, topic: string): Uint8Array {
-  const nonce = sealed.subarray(0, 12);
-  const ct = sealed.subarray(12);
-  return chacha20poly1305(id.Ke, nonce, enc(topic)).decrypt(ct);
-}
+/** Inverse of seal(); throws if the tag doesn't verify (loam-sync open). */
+export const open = (id: Identity, sealed: Uint8Array, topic: string): Uint8Array => LOpen(id, sealed, topic);
 
 // ---- Pairing code <-> secret (Crockford base32, no I/O) --------------------
 // 32 bytes = 256 bits = 52 base32 chars. Shown grouped; parsing is lenient.
