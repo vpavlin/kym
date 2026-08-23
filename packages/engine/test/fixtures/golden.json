@@ -175,7 +175,7 @@
         "id": "A-e0",
         "type": "assign",
         "hlc": {
-          "wall": 2000004,
+          "wall": 2000000,
           "ctr": 0,
           "dev": "A"
         },
@@ -192,7 +192,7 @@
         "id": "A-e1",
         "type": "txn.create",
         "hlc": {
-          "wall": 2000005,
+          "wall": 2000001,
           "ctr": 0,
           "dev": "A"
         },
@@ -212,7 +212,7 @@
         "id": "B-e0",
         "type": "assign",
         "hlc": {
-          "wall": 3000004,
+          "wall": 3000000,
           "ctr": 0,
           "dev": "B"
         },
@@ -229,7 +229,7 @@
         "id": "B-e1",
         "type": "txn.create",
         "hlc": {
-          "wall": 3000005,
+          "wall": 3000001,
           "ctr": 0,
           "dev": "B"
         },
@@ -249,7 +249,7 @@
         "id": "B-e2",
         "type": "move",
         "hlc": {
-          "wall": 3000006,
+          "wall": 3000002,
           "ctr": 0,
           "dev": "B"
         },
