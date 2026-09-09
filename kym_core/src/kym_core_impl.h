@@ -11,6 +11,7 @@ class QTimer;
 #include "kym_crypto.hpp"
 #include "kym_wire_std.hpp"
 #include "logos_sync/reconcile.hpp"   // RBSR set reconciliation (vendored; was kym_reconcile_std.hpp)
+#include "logos_sync/catchup.hpp"     // RBSR recursive v2 catch-up (bounded fp/ids/need; replaces v1 whole-id SUMMARY)
 
 // The reconciler now lives in logos_sync (lifted verbatim from KYM's original
 // kym_reconcile_std.hpp). Alias it back into kym:: so call sites keep using
@@ -189,6 +190,8 @@ private:
     void bootstrapDelivery();
     void ingestRaw(const std::string& contentTopic, const std::string& sealed);
     void sealAndSend(Budget& b, const kym::Event& e);
+    void sealAndSendJson(Budget& b, const nlohmann::json& msg);   // seal+send a control frame (v2 fp/ids/need) with a random nonce
+    void catchupRound(Budget& b);                                  // v2 RBSR: publish a bounded fp over this budget's id-set
     void sendSyncReq();
     // Publish a sealed (base64) payload on a topic, ROBUST to either delivery build:
     // newer builds want a JSON byte array and throw "type must be array, but is

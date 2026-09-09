@@ -1108,7 +1108,7 @@ void KymCoreImpl::bootstrapDelivery() {
                     if (!b.haveKey) continue;
                     b.subscribed = true;
                     joinBudgetTransport(b);
-                    sendSummary(b);
+                    catchupRound(b);            // v2 RBSR: reconcile the delta (was v1 sendSummary)
                     b.seedStoreRemaining = 3;   // seed the fleet store a few times, then stop
                     b.lastAutoResync = 0;
                 }
@@ -1297,6 +1297,18 @@ void KymCoreImpl::ingestRaw(const std::string &contentTopic, const std::string &
     }
     const std::string type = env["type"].get<std::string>();
     fprintf(stderr, "KYMRX type=%s seen=%ld opened=%ld\n", type.c_str(), m_rxSeen, m_rxOpened);
+    // v2 RBSR catch-up control frame (fp/ids/need): reconcile the id-set and serve/pull the EXACT
+    // delta. respond() is a pure state-machine step; replies + served events go back over the
+    // channel and converge in a few rounds. This is the recovery path (replaces v1 SUMMARY).
+    const std::string t = env.value("t", std::string());
+    if (env.value("v", 0) == 2 && (t == "fp" || t == "ids" || t == "need")) {
+        loadPersistedLog(b);
+        auto stp = logos_sync::catchup::respond(b.log, env, m_deviceId);
+        for (auto &reply : stp.replies) sealAndSendJson(b, reply);
+        for (auto &ev : stp.serve) sealAndSend(b, ev);
+        publishBudget();
+        return;
+    }
     if (type == "SYNC_REQ") {   // legacy whole-log path (kept for old peers)
         if (!env.contains("from") || env["from"].get<std::string>() != m_deviceId)
             for (const auto &e : b.log) sealAndSend(b, e);
@@ -1413,6 +1425,28 @@ void KymCoreImpl::sendSummary(Budget &b) {
     fprintf(stderr, "KYMTX SUMMARY items=%zu\n", b.log.size());
 }
 
+// Seal+send a v2 catch-up control frame (fp/ids/need). Random nonce (like SYNC_REQ/SUMMARY):
+// a control frame carries no immutable id and must never be store-deduped onto an old one.
+void KymCoreImpl::sealAndSendJson(Budget &b, const nlohmann::json &msg) {
+    if (!m_nodeReady || !b.haveKey) return;
+    kym::Bytes nonce(12); RAND_bytes(nonce.data(), 12);
+    kym::Bytes sealed = kym::seal(b.identity, kym::strBytes(msg.dump()), b.topic, nonce);
+    deliverySend(b.topic, b64encode(std::string(sealed.begin(), sealed.end())));
+    m_txTotal++;
+}
+
+// v2 RBSR catch-up (replaces the v1 whole-id-list SUMMARY, which segments for a non-trivial log
+// and this delivery can't encrypt a multi-segment channel send). Publish a BOUNDED fingerprint
+// over this budget's id-set; the peer's respond() splits/reconciles and serves ONLY the exact
+// events either side lacks — every message stays a single segment. Mirrors qaku_core 0.1.19.
+void KymCoreImpl::catchupRound(Budget &b) {
+    if (!m_nodeReady || !b.haveKey) return;
+    b.lastSummaryTx = (int64_t)std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    sealAndSendJson(b, logos_sync::catchup::buildInitial(b.log, m_deviceId));
+    fprintf(stderr, "KYMTX catchup fp items=%zu\n", b.log.size());
+}
+
 void KymCoreImpl::scheduleBackfill() {
     if (!m_nodeReady) return;
     for (const auto &e : cur().log) sealAndSend(cur(), e);   // legacy whole-log re-serve (old SYNC_REQ peers only)
@@ -1519,7 +1553,7 @@ void KymCoreImpl::maybeAutoResync(Budget &b) {
         std::chrono::system_clock::now().time_since_epoch()).count();
     if (b.lastAutoResync != 0 && now - b.lastAutoResync < 30000) return;
     b.lastAutoResync = now;
-    sendSummary(b);   // reconcile: peers send only the events we lack, and vice versa
+    catchupRound(b);   // v2 RBSR reconcile: peers serve only the exact delta either side lacks
     // Store-seed burst (NOT a perpetual rebroadcast). A phone can RECEIVE but its
     // publishes don't reliably propagate through the mesh, so it can't get a SYNC_REQ
     // to us to trigger a serve — it relies on store-pull instead, which needs the log
