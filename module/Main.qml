@@ -169,6 +169,20 @@ Item {
         try { var o = JSON.parse(jsonStr); return (o && o.events && o.events.length) ? o.events.length : 0; }
         catch (e) { return 0; }
     }
+    // Deferred, crash-safe apply. All state assignment goes through _pushBudget → the actual
+    // root.budgetJson write happens on the NEXT event-loop tick, never synchronously inside a
+    // delegate's onClicked (selectBudget/deleteBudget/deleteGroup/…). budget = JSON.parse(budgetJson)
+    // and every model binds to it, so a synchronous reassign rebuilds those models mid-handler and
+    // destroys the very delegate whose onClicked is still on the stack → "Object destroyed while a
+    // QML signal handler is in progress" → Aborted. Mirrors qaku's fix.
+    property string _pendingBudget: ""
+    function _applyPendingBudget() {
+        if (root._pendingBudget === "") return;
+        var b = root._pendingBudget; root._pendingBudget = "";
+        root.budgetJson = b;
+    }
+    function _pushBudget(b) { if (!b) return; root._pendingBudget = b; Qt.callLater(root._applyPendingBudget); }
+
     function refresh() {
         var b = asBudget(callCore("snapshot", []));
         if (!b) return;
@@ -179,13 +193,13 @@ Item {
         // it. This was the "budget flickers empty every couple seconds" bug. A
         // genuine reset comes through a mutation result (run()), which bypasses this.
         if (eventCountOf(b) === 0 && eventCountOf(root.budgetJson) > 0) return;
-        root.budgetJson = b;
+        root._pushBudget(b);
     }
     // Inspect a mutation result. On success kym_core returns the FRESH budget JSON
     // (not ""), so we render straight from the instance that applied the edit.
     function run(result, okMsg) {
         var b = asBudget(result);
-        if (b) { root.budgetJson = b; root.action = ""; showToast(okMsg || "Saved", false); return; }
+        if (b) { root._pushBudget(b); root.action = ""; showToast(okMsg || "Saved", false); return; }
         var r = (result === undefined || result === null) ? "" : String(result).trim();
         var ok = (r === "" || r === '""' || r === "null" || r === "undefined" || r === "{}" || r === "true");
         if (!ok) showToast(r.length > 100 ? r.substring(0, 100) + "…" : r, true);
@@ -216,7 +230,7 @@ Item {
     }
     function gotoMonth(ym) {
         var b = asBudget(callCore("setViewMonth", [ym]));
-        if (b) { root.budgetJson = b; return; }
+        if (b) { root._pushBudget(b); return; }
         showToast("Update kym_core to 0.5.0 for month navigation", true);
     }
 
@@ -233,13 +247,17 @@ Item {
             if (moduleName !== "kym_core") return;
             if (eventName === "budgetChanged") {
                 var b = root.asBudget(data && data.length ? data[0] : null);
-                if (b) root.budgetJson = b;
+                if (b) root._pushBudget(b);
             } else if (eventName === "statusChanged") {
                 if (data && data.length) root.statusText = String(data[0]);
             }
         }
     }
-    Timer { interval: 2500; running: true; repeat: true; onTriggered: root.refresh() }
+    // The view is kept current by the async budgetChanged push (Connections above). This is only a
+    // slow safety poll for a rarely-dropped push — NOT the fast 2.5s blocking snapshot() that froze
+    // the UI when kym_core was busy (and a click during the freeze piled a second blocking call on
+    // and took the host down). refresh() already routes through the deferred _pushBudget.
+    Timer { interval: 6000; running: true; repeat: true; onTriggered: root.refresh() }
     Component.onCompleted: {
         if (typeof logos !== "undefined" && logos.onModuleEvent) {
             logos.onModuleEvent("kym_core", "budgetChanged");
