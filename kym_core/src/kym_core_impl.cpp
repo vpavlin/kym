@@ -1290,16 +1290,17 @@ void KymCoreImpl::ingestRaw(const std::string &contentTopic, const std::string &
     // stays alive and responsive.
     try {
     auto env = json::parse(js, nullptr, false);
-    if (!env.is_object() || !env.contains("type") || !env["type"].is_string()) {
+    if (!env.is_object()) {
         m_rxDropped++;
         fprintf(stderr, "KYMRX bad envelope: %s\n", js.substr(0, 120).c_str());
         return;
     }
-    const std::string type = env["type"].get<std::string>();
-    fprintf(stderr, "KYMRX type=%s seen=%ld opened=%ld\n", type.c_str(), m_rxSeen, m_rxOpened);
     // v2 RBSR catch-up control frame (fp/ids/need): reconcile the id-set and serve/pull the EXACT
     // delta. respond() is a pure state-machine step; replies + served events go back over the
     // channel and converge in a few rounds. This is the recovery path (replaces v1 SUMMARY).
+    // NOTE: these frames carry NO "type" field (t=fp/ids/need only) — the qaku wire shape — so this
+    // MUST run BEFORE the type-required guard below, or desktop/crib silently drop every catch-up
+    // frame (the bug that made 0.7.7's v2 path dead on the wire while the pure convergence test passed).
     const std::string t = env.value("t", std::string());
     if (env.value("v", 0) == 2 && (t == "fp" || t == "ids" || t == "need")) {
         loadPersistedLog(b);
@@ -1309,6 +1310,13 @@ void KymCoreImpl::ingestRaw(const std::string &contentTopic, const std::string &
         publishBudget();
         return;
     }
+    if (!env.contains("type") || !env["type"].is_string()) {
+        m_rxDropped++;
+        fprintf(stderr, "KYMRX bad envelope (no type): %s\n", js.substr(0, 120).c_str());
+        return;
+    }
+    const std::string type = env["type"].get<std::string>();
+    fprintf(stderr, "KYMRX type=%s seen=%ld opened=%ld\n", type.c_str(), m_rxSeen, m_rxOpened);
     if (type == "SYNC_REQ") {   // legacy whole-log path (kept for old peers)
         if (!env.contains("from") || env["from"].get<std::string>() != m_deviceId)
             for (const auto &e : b.log) sealAndSend(b, e);

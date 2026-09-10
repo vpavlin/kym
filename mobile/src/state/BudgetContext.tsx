@@ -42,6 +42,7 @@ import {
   sendEnvelope,
   getPeerCount,
   sendSyncReq,
+  sendCatchupMsg,
   startReceiving,
   refreshRoutes,
   stopNode,
@@ -49,6 +50,7 @@ import {
   storeSync,
   getStoreInfo,
 } from "../lib/delivery";
+import { buildInitial, respond } from "../lib/catchup";
 import { ensureSecret, saveSecret, loadIdentity, deleteSecret } from "../lib/identityStore";
 
 // UI-facing sync state. "offline" covers the emulator/web (no native .so) and any
@@ -315,8 +317,10 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
     [ingest]
   );
 
-  // Re-serve a budget's whole log to a peer that asked (SYNC_REQ). The current
-  // budget's log is in memory; a background budget's is read from disk.
+  // Re-serve a budget's whole log to a peer that asked (legacy SYNC_REQ from an old
+  // peer). The current budget's log is in memory; a background budget's is read from
+  // disk. The v2 catch-up path (sendCatchup/onCatchup) supersedes this — it serves only
+  // the exact delta — but we keep it so a pre-v2 peer still converges.
   const reserveBudget = useCallback(async (budgetId: string) => {
     const log =
       budgetId === currentBudgetIdRef.current
@@ -324,6 +328,39 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
         : await loadBudgetLog(budgetId);
     for (const e of log) sendEnvelope(e, budgetId).catch(() => {});
   }, []);
+
+  // v2 RBSR catch-up: publish our bounded id-fingerprint for a budget so peers serve the
+  // EXACT events we lack (and we serve the ones they lack). Wire-identical to the desktop
+  // core's catchupRound. Replaces the whole-log flood — a phone that missed one event pulls
+  // just that one, and a cold-started phone recurses down to the full set. Cheap + idempotent.
+  const sendCatchup = useCallback(async (budgetId: string) => {
+    const log =
+      budgetId === currentBudgetIdRef.current
+        ? eventsRef.current
+        : await loadBudgetLog(budgetId);
+    await sendCatchupMsg(budgetId, buildInitial(log, deviceIdRef.current)).catch(() => {});
+  }, []);
+
+  // Handle one incoming catch-up frame (fp/ids/need): step the pure reconciliation over
+  // this budget's log, serve the id-exact events the peer lacks, and publish the fp/ids/need
+  // replies (all single-segment). Mirrors the desktop core's ingest dispatch of respond().
+  const onCatchup = useCallback(async (budgetId: string, msg: any) => {
+    const log =
+      budgetId === currentBudgetIdRef.current
+        ? eventsRef.current
+        : await loadBudgetLog(budgetId);
+    const step = respond(log, msg, deviceIdRef.current);
+    for (const e of step.serve) sendEnvelope(e, budgetId).catch(() => {});
+    for (const r of step.replies) sendCatchupMsg(budgetId, r).catch(() => {});
+  }, []);
+
+  // Fire a catch-up round for EVERY household we hold a key for (not just the rendered
+  // one) — background budgets must stay converged too. Called on connect (a ladder, to
+  // beat a still-forming mesh), on a manual Sync, and periodically.
+  const catchupAll = useCallback(async () => {
+    const reg = await loadRegistry();
+    for (const b of reg.budgets) sendCatchup(b.id).catch(() => {});
+  }, [sendCatchup]);
 
   // Re-derive every budget's colour from its household identity (topic), so colours
   // are deterministic AND identical across paired devices — and so budgets created
@@ -376,17 +413,17 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
     setEvents([]);
     // Subscribe the new topic on the live node (or bring the node up if it wasn't).
     if (syncActiveRef.current) {
-      refreshRoutes().catch(() => {});
+      refreshRoutes().then(() => sendCatchup(id)).catch(() => {});
     } else if (deliveryAvailable()) {
       ensureNode()
         .then(() => {
           syncActiveRef.current = true;
           setSyncStatus("syncing");
-          sendSyncReq(deviceIdRef.current).catch(() => {});
+          sendCatchup(id).catch(() => {});
         })
         .catch(() => {});
     }
-  }, []);
+  }, [sendCatchup]);
 
   // JOIN an existing budget from another device's pairing code (or kym://pair link):
   // add it as a NEW budget entry keyed to that household's secret, then sync it from
@@ -423,20 +460,24 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
     setCurrentBudgetId(id);
     eventsRef.current = [];
     setEvents([]);
-    // Start syncing the joined household and pull its whole log (sync from zero).
+    // Start syncing the joined household and pull its log via v2 catch-up (sync from zero:
+    // our empty fingerprint recurses down to receive the peer's full set). Also pull from
+    // the fleet store, the reliable path when no live peer is reachable ("joined but no history").
     if (syncActiveRef.current) {
       await refreshRoutes().catch(() => {});
-      sendSyncReq(deviceIdRef.current).catch(() => {});
+      sendCatchup(id).catch(() => {});
+      storeSync(routeIncoming).catch(() => {});
     } else if (deliveryAvailable()) {
       ensureNode()
         .then(() => {
           syncActiveRef.current = true;
           setSyncStatus("syncing");
-          sendSyncReq(deviceIdRef.current).catch(() => {});
+          sendCatchup(id).catch(() => {});
+          storeSync(routeIncoming).catch(() => {});
         })
         .catch(() => {});
     }
-  }, [selectBudget]);
+  }, [selectBudget, sendCatchup, routeIncoming]);
 
   // Manual reconnect: tear the node down and bring it back up (one deliberate
   // restart; setup() is not re-run). Use it if the mesh looks stuck.
@@ -454,13 +495,14 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
   const syncNow = useCallback(async () => {
     if (!syncActiveRef.current) return;
     // Primary: pull the full history from the fleet store (reliable, no reliance on
-    // our own publish propagating). Then the SYNC_REQ + re-serve belt-and-suspenders.
+    // our own publish propagating). Then v2 catch-up over every household (serves/pulls
+    // the exact delta). A bare SYNC_REQ too, so a pre-v2 peer still re-serves us.
     storeSync(routeIncoming)
       .then((s) => setStoreInfo(s.detail))
       .catch(() => {});
+    catchupAll().catch(() => {});
     sendSyncReq(deviceIdRef.current).catch(() => {});
-    reserveBudget(currentBudgetIdRef.current).catch(() => {});
-  }, [reserveBudget, routeIncoming]);
+  }, [catchupAll, routeIncoming]);
 
   // Permanently delete a budget on THIS device: drop its log, forget its household
   // key, and remove it from the registry. Destructive — the UI confirms hard. If it
@@ -492,6 +534,7 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
     let alive = true;
     let unsub: (() => void) | null = null;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let catchupTimer: ReturnType<typeof setInterval> | null = null;
     (async () => {
       try {
         if (!deliveryAvailable()) {
@@ -508,8 +551,9 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
           routeIncoming,
           (budgetId, from) => {
             if (!from || from === deviceIdRef.current) return; // never answer ourselves
-            reserveBudget(budgetId).catch(() => {});
-          }
+            reserveBudget(budgetId).catch(() => {}); // legacy pre-v2 peer asked — re-serve
+          },
+          (budgetId, msg) => { onCatchup(budgetId, msg).catch(() => {}); } // v2 RBSR reconcile
         );
         setSyncStatus("connecting");
         await ensureNode(); // throws NOT_PAIRED if no budget has a household key
@@ -517,13 +561,17 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
         setSyncStatus("syncing");
         setSyncError(null);
         // PULL history from the fleet store — the reliable catch-up (doesn't need our
-        // publish to propagate, unlike SYNC_REQ). Runs once on connect; folds every
-        // stored event (dedup by id). Falls back to SYNC_REQ for anything the store
-        // has aged out / when a live peer is present.
+        // publish to propagate). Runs once on connect; folds every stored event (dedup by id).
         storeSync(routeIncoming)
           .then((s) => { if (alive) setStoreInfo(s.detail); })
           .catch(() => {});
-        sendSyncReq(deviceIdRef.current).catch(() => {}); // pull anything we're missing
+        // v2 RBSR catch-up: publish our id-fingerprint so peers serve the exact delta.
+        // Retried on a short ladder to beat a still-forming mesh (a dropped first frame
+        // otherwise = no history), then periodically so a drop always recovers. qaku/desktop pattern.
+        catchupAll().catch(() => {});
+        setTimeout(() => { if (alive) catchupAll().catch(() => {}); }, 9000);
+        setTimeout(() => { if (alive) catchupAll().catch(() => {}); }, 24000);
+        catchupTimer = setInterval(() => { if (alive) catchupAll().catch(() => {}); }, 30000);
       } catch (e: any) {
         // NOT_PAIRED, UnsatisfiedLinkError (arm64 .so on x86_64), a rejected config,
         // etc. Surface it and self-heal with a BOUNDED retry (no tight loop).
@@ -544,8 +592,9 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
       alive = false;
       if (unsub) unsub();
       if (retryTimer) clearTimeout(retryTimer);
+      if (catchupTimer) clearInterval(catchupTimer);
     };
-  }, [ready, ingest, retryTick]);
+  }, [ready, ingest, retryTick, onCatchup, catchupAll]);
 
   const clock = () => {
     if (!clockRef.current) throw new Error("clock not ready");

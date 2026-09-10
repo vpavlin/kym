@@ -39,6 +39,10 @@ let routes: Route[] = [];
 // so startReceiving() and ensureNode() may be called in either order.
 let onEventCb: ((budgetId: string, event: KymEvent) => void) | null = null;
 let onSyncReqCb: ((budgetId: string, from: string) => void) | null = null;
+// v2 RBSR catch-up control frame (fp/ids/need) — raw reconciliation message, wire-identical
+// to the desktop core's sealAndSendJson. The context runs respond() (it holds the log) and
+// serves the exact delta + replies. Replaces the whole-log SYNC_REQ flood.
+let onCatchupCb: ((budgetId: string, msg: any) => void) | null = null;
 
 /** Error thrown when a sync is attempted before pairing. Surfaced to the user. */
 export const NOT_PAIRED = "NOT_PAIRED: pair this device with your household first";
@@ -68,7 +72,11 @@ function adapterReceive(topic: string, candidates: Uint8Array[]): boolean {
       try { plaintext = open(r.id, cand, r.topic); } catch { continue; } // wrong key/candidate
       try {
         const env = JSON.parse(utf8Decode(plaintext));
-        if (env && env.type === "EVENT" && env.event) {
+        // v2 catch-up frame (no `type`, carries t=fp/ids/need) — checked FIRST, before the
+        // type-based envelopes, exactly like the desktop core's ingest ordering.
+        if (env && env.v === 2 && (env.t === "fp" || env.t === "ids" || env.t === "need")) {
+          onCatchupCb?.(r.budgetId, env);
+        } else if (env && env.type === "EVENT" && env.event) {
           onEventCb?.(r.budgetId, env.event as KymEvent);
         } else if (env && env.type === "SYNC_REQ") {
           onSyncReqCb?.(r.budgetId, typeof env.from === "string" ? env.from : "");
@@ -149,18 +157,36 @@ export async function sendSyncReq(deviceId: string): Promise<void> {
 }
 
 /**
+ * Publish one v2 RBSR catch-up control frame (fp/ids/need) on a budget's topic. The
+ * `msg` is the RAW reconciliation message ({v:2,t,...}) — sealed and sent verbatim so
+ * it is byte-identical to the desktop core's sealAndSendJson wire. An ephemeral control
+ * frame: a fresh per-send seed keeps the deterministic nonce unique so a fresh frame is
+ * never deduped by the fleet store against an old one.
+ */
+export async function sendCatchupMsg(budgetId: string, msg: any): Promise<void> {
+  await ensureNode();
+  const r = routes.find((x) => x.budgetId === budgetId);
+  if (!r) return;
+  const seed = `CATCHUP|${msg?.t || "?"}|${randToken()}`;
+  const sealed = seal(r.id, seed, utf8Bytes(JSON.stringify(msg)), r.topic);
+  await transport.publishSealed(r.topic, sealed).catch(() => {});
+}
+
+/**
  * Register the receive callbacks. The shared transport owns the single native
  * listener (attached in ensureNode); this just wires our dispatch into it. Returns an
  * unsubscribe that detaches the callbacks. Safe to call before or after ensureNode.
  */
 export function startReceiving(
   onEvent: (budgetId: string, event: KymEvent) => void,
-  onSyncReq?: (budgetId: string, from: string) => void
+  onSyncReq?: (budgetId: string, from: string) => void,
+  onCatchup?: (budgetId: string, msg: any) => void
 ): () => void {
   if (!transport.deliveryAvailable()) return () => {};
   onEventCb = onEvent;
   onSyncReqCb = onSyncReq || null;
-  return () => { onEventCb = null; onSyncReqCb = null; };
+  onCatchupCb = onCatchup || null;
+  return () => { onEventCb = null; onSyncReqCb = null; onCatchupCb = null; };
 }
 
 /**
