@@ -557,7 +557,14 @@ std::string KymCoreImpl::setViewMonth(std::string month) {
     publishBudget(); return m_budgetJson;
 }
 
+// Safety net: a fold that throws (a malformed field from any peer) must not break every call and the
+// snapshot timer for this budget — log it and keep serving the last published state.
 void KymCoreImpl::publishBudget() {
+    try { publishBudgetUnsafe(); }
+    catch (const std::exception& e) { fprintf(stderr, "[kym] publishBudget: fold failed: %s\n", e.what()); }
+    catch (...) { fprintf(stderr, "[kym] publishBudget: fold failed\n"); }
+}
+void KymCoreImpl::publishBudgetUnsafe() {
     rebuildNameMaps();
     // Default to the LIVE calendar month (not the latest month with data), so a
     // fresh month shows last month's Available rolled forward instead of being

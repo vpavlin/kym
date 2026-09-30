@@ -36,6 +36,19 @@ using logos_sync::eventToJson;
 using logos_sync::eventFromJson;
 using logos_sync::mergeEvents;
 
+// Tolerant field read: the default when the key is missing, null, or the wrong type. nlohmann's
+// value() THROWS on a null or wrong-typed field, and mobile sends e.g. `categoryId: null` for an
+// uncategorized expense and a numeric `date` for a reconcile adjustment. One such event made every
+// fold of the budget throw ("Invalid response" everywhere, the hub's snapshot timer failing).
+template <class T>
+inline T jget(const nlohmann::json& j, const char* key, T def) {
+  if (!j.is_object()) return def;
+  auto it = j.find(key);
+  if (it == j.end() || it->is_null()) return def;
+  try { return it->template get<T>(); } catch (...) { return def; }
+}
+inline std::string jget(const nlohmann::json& j, const char* key, const char* def) { return jget<std::string>(j, key, std::string(def)); }
+
 struct Split { std::string categoryId; Money amount; };
 
 struct Account { std::string id, name, type; bool onBudget; Money startingBalance; std::string currency; };
@@ -87,9 +100,9 @@ inline Admission admitEvents(const std::vector<Event>& ordered) {
     const std::string& author = e.hlc.dev;
     if (e.type == "group.init") {
       out.isGroup = true;
-      std::string founder = e.payload.value("founderId", author);
+      std::string founder = jget(e.payload, "founderId", author);
       if (!members.count(founder)) {
-        members[founder] = Member{founder, e.payload.value("founderName", founder), "admin", true};
+        members[founder] = Member{founder, jget(e.payload, "founderName", founder), "admin", true};
         order.push_back(founder);
       }
       out.admitted.push_back(e);
@@ -100,14 +113,14 @@ inline Admission admitEvents(const std::vector<Event>& ordered) {
     std::string role = (m && m->active) ? m->role : "";
     if (e.type == "member.add" || e.type == "member.role" || e.type == "member.remove") {
       if (role != "admin") continue;          // only admins manage members
-      const std::string mid = e.payload.value("memberId", std::string());
+      const std::string mid = jget(e.payload, "memberId", std::string());
       if (e.type == "member.add") {
         if (!mid.empty() && !members.count(mid)) {
-          members[mid] = Member{mid, e.payload.value("name", mid), e.payload.value("role", std::string("viewer")), true};
+          members[mid] = Member{mid, jget(e.payload, "name", mid), jget(e.payload, "role", std::string("viewer")), true};
           order.push_back(mid);
         }
       } else if (e.type == "member.role") {
-        if (Member* t = get(mid)) t->role = e.payload.value("role", t->role);
+        if (Member* t = get(mid)) t->role = jget(e.payload, "role", t->role);
       } else { // member.remove
         if (Member* t = get(mid)) t->active = false;
       }
@@ -159,44 +172,44 @@ inline BudgetState computeState(const std::vector<Event>& rawEvents, std::option
     if (e.type == "group.create") {
       // group name not needed for the fold's numbers
     } else if (e.type == "account.create") {
-      Account a{e.payload.value("accountId", std::string()), e.payload.value("name", std::string()),
-                e.payload.value("accountType", std::string()),
-                e.payload.value("onBudget", true),
-                e.payload.value("startingBalance", (Money)0),
-                e.payload.value("currency", std::string())};
+      Account a{jget(e.payload, "accountId", std::string()), jget(e.payload, "name", std::string()),
+                jget(e.payload, "accountType", std::string()),
+                jget(e.payload, "onBudget", true),
+                jget(e.payload, "startingBalance", (Money)0),
+                jget(e.payload, "currency", std::string())};
       if (!accounts.count(a.id)) accountOrder.push_back(a.id);
       accounts[a.id] = a;
     } else if (e.type == "account.edit") {
-      auto it = accounts.find(e.payload.value("accountId", std::string()));
-      if (it != accounts.end() && e.payload.contains("name")) it->second.name = e.payload.value("name", std::string());
+      auto it = accounts.find(jget(e.payload, "accountId", std::string()));
+      if (it != accounts.end() && e.payload.contains("name")) it->second.name = jget(e.payload, "name", std::string());
     } else if (e.type == "category.create") {
-      const auto id = e.payload.value("categoryId", std::string());
+      const auto id = jget(e.payload, "categoryId", std::string());
       if (!categories.count(id)) categoryOrder.push_back(id);
       categories.insert(id);
-      st.categoryGroup[id] = e.payload.value("groupId", std::string());
+      st.categoryGroup[id] = jget(e.payload, "groupId", std::string());
     } else if (e.type == "category.target") {
-      const auto cid = e.payload.value("categoryId", std::string());
-      Money amt = e.payload.value("amount", (Money)0);
+      const auto cid = jget(e.payload, "categoryId", std::string());
+      Money amt = jget(e.payload, "amount", (Money)0);
       if (!amt) targets.erase(cid);
-      else targets[cid] = Target{e.payload.value("targetType", std::string()),
-                                 e.payload.value("targetMonth", std::string()), amt};
+      else targets[cid] = Target{jget(e.payload, "targetType", std::string()),
+                                 jget(e.payload, "targetMonth", std::string()), amt};
     } else if (e.type == "assign") {
-      const auto k = keyOf(e.payload.value("categoryId", std::string()), e.payload.value("month", std::string()));
-      Money amt = e.payload.value("amount", (Money)0);
-      std::string mode = e.payload.value("mode", std::string("delta"));
+      const auto k = keyOf(jget(e.payload, "categoryId", std::string()), jget(e.payload, "month", std::string()));
+      Money amt = jget(e.payload, "amount", (Money)0);
+      std::string mode = jget(e.payload, "mode", std::string("delta"));
       if (mode == "set") assigned[k] = amt; else assigned[k] += amt;
-      months.insert(e.payload.value("month", std::string()));
+      months.insert(jget(e.payload, "month", std::string()));
     } else if (e.type == "move") {
-      Money amt = e.payload.value("amount", (Money)0);
-      const auto m = e.payload.value("month", std::string());
-      assigned[keyOf(e.payload.value("fromCategoryId", std::string()), m)] -= amt;
-      assigned[keyOf(e.payload.value("toCategoryId", std::string()), m)] += amt;
+      Money amt = jget(e.payload, "amount", (Money)0);
+      const auto m = jget(e.payload, "month", std::string());
+      assigned[keyOf(jget(e.payload, "fromCategoryId", std::string()), m)] -= amt;
+      assigned[keyOf(jget(e.payload, "toCategoryId", std::string()), m)] += amt;
       months.insert(m);
     } else if (e.type == "category.delete") {
       // Remove an (empty) category from the fold. kym_core only emits this for a
       // category with no assignments and no activity, so there's no orphaned money
       // to reconcile; drop it and any stray plan entries defensively.
-      const auto id = e.payload.value("categoryId", std::string());
+      const auto id = jget(e.payload, "categoryId", std::string());
       categories.erase(id);
       st.categoryGroup.erase(id);
       categoryOrder.erase(std::remove(categoryOrder.begin(), categoryOrder.end(), id), categoryOrder.end());
@@ -204,9 +217,9 @@ inline BudgetState computeState(const std::vector<Event>& rawEvents, std::option
       for (auto it = assigned.begin(); it != assigned.end(); )
         (it->first.rfind(id + " ", 0) == 0) ? it = assigned.erase(it) : ++it;
     } else if (e.type == "category.archive") {
-      st.archivedCategories.insert(e.payload.value("categoryId", std::string()));   // stays in the fold; just flagged hidden
+      st.archivedCategories.insert(jget(e.payload, "categoryId", std::string()));   // stays in the fold; just flagged hidden
     } else if (e.type == "category.unarchive") {
-      st.archivedCategories.erase(e.payload.value("categoryId", std::string()));
+      st.archivedCategories.erase(jget(e.payload, "categoryId", std::string()));
     }
     // group.delete has no numeric effect (groups are a display grouping); it's
     // applied in kym_core's name maps so the empty group stops rendering.
@@ -217,29 +230,29 @@ inline BudgetState computeState(const std::vector<Event>& rawEvents, std::option
   std::map<std::string, Rec> txns;
   std::vector<std::string> txnOrder;
   auto applyFields = [](TxnView& v, const Event& e) {
-    if (e.payload.contains("accountId")) v.accountId = e.payload.value("accountId", std::string());
-    if (e.payload.contains("date")) v.date = e.payload.value("date", std::string());
-    if (e.payload.contains("amount")) v.amount = e.payload.value("amount", (Money)0);
-    if (e.payload.contains("categoryId")) { v.categoryId = e.payload.value("categoryId", std::string()); v.hasCategory = true; }
-    if (e.payload.contains("transferId")) v.transferId = e.payload.value("transferId", std::string());
+    if (e.payload.contains("accountId")) v.accountId = jget(e.payload, "accountId", std::string());
+    if (e.payload.contains("date")) v.date = jget(e.payload, "date", std::string());
+    if (e.payload.contains("amount")) v.amount = jget(e.payload, "amount", (Money)0);
+    if (e.payload.contains("categoryId")) { v.categoryId = jget(e.payload, "categoryId", std::string()); v.hasCategory = true; }
+    if (e.payload.contains("transferId")) v.transferId = jget(e.payload, "transferId", std::string());
     if (e.payload.contains("splits") && e.payload.at("splits").is_array()) {
       v.splits.clear();
       for (const auto& sp : e.payload.at("splits"))
-        v.splits.push_back(Split{sp.value("categoryId", std::string()), sp.value("amount", (Money)0)});
+        v.splits.push_back(Split{jget(sp, "categoryId", std::string()), jget(sp, "amount", (Money)0)});
       v.hasSplits = true;
     }
   };
   for (const auto& e : ordered) {
     if (e.type == "txn.create") {
-      const auto tid = e.payload.value("txnId", std::string());
+      const auto tid = jget(e.payload, "txnId", std::string());
       auto& r = txns[tid];
       if (!r.exists) { r.exists = true; txnOrder.push_back(tid); }
       applyFields(r.v, e);
     } else if (e.type == "txn.edit") {
-      auto it = txns.find(e.payload.value("txnId", std::string()));
+      auto it = txns.find(jget(e.payload, "txnId", std::string()));
       if (it != txns.end()) applyFields(it->second.v, e);
     } else if (e.type == "txn.delete") {
-      auto it = txns.find(e.payload.value("txnId", std::string()));
+      auto it = txns.find(jget(e.payload, "txnId", std::string()));
       if (it != txns.end()) it->second.deleted = true;
     }
   }

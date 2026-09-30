@@ -183,6 +183,7 @@ private:
     void pushEvent(const kym::Event& e, bool broadcast);
     void rebuildNameMaps();
     void publishBudget();                  // recompute budgetJson + emit budgetChanged
+    void publishBudgetUnsafe();
     void setStatus(const std::string& s);
 
     // delivery — routed per budget. ingestRaw matches the wire contentTopic to the
