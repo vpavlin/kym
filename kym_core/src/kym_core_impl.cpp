@@ -39,19 +39,9 @@ std::string makeDeviceName() {
     s.push_back('-'); s.push_back(hx[b[2] >> 4]); s.push_back(hx[b[2] & 0xf]);
     return s;
 }
-// human amount ("10.50", "-3") → integer milliunits (×1000), never float.
-kym::Money toMilli(const std::string &in) {
-    size_t i = 0; while (i < in.size() && std::isspace((unsigned char)in[i])) i++;
-    bool neg = i < in.size() && in[i] == '-';
-    std::string s; for (char c : in) if ((c >= '0' && c <= '9') || c == '.') s.push_back(c);
-    if (s.empty()) return 0;
-    auto dot = s.find('.');
-    int64_t w = std::stoll("0" + (dot == std::string::npos ? s : s.substr(0, dot)));
-    std::string frac = (dot == std::string::npos ? "" : s.substr(dot + 1)) + "000";
-    int64_t f = std::stoll("0" + frac.substr(0, 3));
-    int64_t v = w * 1000 + f;
-    return neg ? -v : v;
-}
+// human amount ("10.50", "10,50", "-3") → integer milliunits (×1000), never float.
+// Lives in money_format.hpp (kym::toMilli) so the parity test can reach it.
+kym::Money toMilli(const std::string &in) { return kym::toMilli(in); }
 std::string slug(const std::string &name) {
     std::string s; bool prevDash = false;
     for (char c : name) {

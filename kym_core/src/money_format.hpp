@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cmath>
 #include <cstdio>
+#include <cctype>
 
 namespace kym {
 
@@ -14,6 +15,35 @@ inline CurrencyFmt currencyFmt(const std::string& code) {
   if (code == "EUR") return {"€", 2, true, " ", ","};
   if (code == "USD") return {"$", 2, false, ",", "."};
   return {"Kč", 0, true, " ", ","}; // CZK default
+}
+
+// Human amount → integer milliunits (×1000), never float. Mirrors toMilli in
+// packages/contract/src/money.mjs: everything but digits "." "," "-" is dropped
+// (spaces/NBSP = thousands); with both "." and "," the LAST is the decimal point;
+// a single "," is a decimal comma ("1500,50"); repeats of one separator = thousands.
+inline int64_t toMilli(const std::string& in) {
+  size_t i = 0; while (i < in.size() && std::isspace((unsigned char)in[i])) i++;
+  bool neg = i < in.size() && in[i] == '-';
+  std::string s; size_t dots = 0, commas = 0;
+  for (char c : in) {
+    if ((c >= '0' && c <= '9') || c == '.' || c == ',') s.push_back(c);
+    if (c == '.') dots++; else if (c == ',') commas++;
+  }
+  char dec = 0;                                 // the decimal separator, 0 = none
+  if (dots && commas) dec = s.rfind('.') > s.rfind(',') ? '.' : ',';
+  else if (commas == 1) dec = ',';
+  else if (dots == 1) dec = '.';
+  std::string whole, frac; bool afterDec = false;
+  for (char c : s) {
+    if (c == dec && !afterDec) { afterDec = true; continue; }
+    if (c == '.' || c == ',') continue;         // thousands separator
+    (afterDec ? frac : whole).push_back(c);
+  }
+  if (whole.size() > 15) return 0;              // guard stoll overflow on junk input
+  int64_t w = whole.empty() ? 0 : std::stoll(whole);
+  frac += "000";
+  int64_t v = w * 1000 + std::stoll(frac.substr(0, 3));
+  return neg ? -v : v;
 }
 
 inline std::string formatMoney(int64_t milli, const std::string& code = "CZK") {

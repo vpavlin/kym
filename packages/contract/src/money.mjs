@@ -6,15 +6,38 @@
 
 const MILLI = 1000;
 
-/** Parse a human amount (e.g. "10.50", 10.5) to integer milliunits. UI-edge only. */
+/**
+ * Normalize the separators of a human amount to a single "." decimal point.
+ * Spaces / NBSP / apostrophes are thousands separators and are dropped (everything
+ * but digits, ".", "," and "-" is). Then:
+ *   - both "." and "," present → the LAST one is the decimal point ("1.500,50", "1,500.50");
+ *   - exactly one "," → decimal comma ("1500,50" → 1500.50);
+ *   - several of the same separator → thousands ("1,500,000", "1.500.000").
+ * kym_core toMilli() (kym_core_impl.cpp) applies the same rules.
+ */
+function normalizeDecimal(raw) {
+  let s = String(raw).trim().replace(/[^0-9.,\-]/g, "");
+  const dots = (s.match(/\./g) || []).length, commas = (s.match(/,/g) || []).length;
+  if (dots && commas) {
+    const dec = s.lastIndexOf(".") > s.lastIndexOf(",") ? "." : ",";
+    s = s.replace(dec === "." ? /,/g : /\./g, "").replace(",", ".");
+  } else if (commas) {
+    s = commas === 1 ? s.replace(",", ".") : s.replace(/,/g, "");
+  } else if (dots > 1) {
+    s = s.replace(/\./g, "");
+  }
+  return s;
+}
+
+/** Parse a human amount (e.g. "10.50", "10,50", "1 500,50", 10.5) to integer milliunits. UI-edge only. */
 export function toMilli(amount) {
   if (typeof amount === "number") return Math.round(amount * MILLI);
-  const s = String(amount).trim().replace(/[^0-9.\-]/g, "");
+  const s = normalizeDecimal(amount);
   if (s === "" || s === "-" || s === ".") return 0;
   // Split on the decimal point and build milliunits with integer math to avoid
   // float drift (e.g. 0.1 * 1000 !== 100 reliably).
   const neg = s.startsWith("-");
-  const [whole, frac = ""] = s.replace(/^-/, "").split(".");
+  const [whole, frac = ""] = s.replace(/-/g, "").split(".");
   const fracMilli = Number((frac + "000").slice(0, 3));
   const value = Number(whole || "0") * MILLI + fracMilli;
   return neg ? -value : value;
