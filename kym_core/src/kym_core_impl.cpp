@@ -23,6 +23,8 @@ using nlohmann::json;
 
 // ---- small std helpers (ports of the Qt originals) -------------------------
 namespace {
+// Most events served in answer to ONE v2 `need` frame (the rest follow in later rounds).
+constexpr size_t kMaxNeedServe = 500;
 std::string uuidHex() {
     unsigned char b[16]; RAND_bytes(b, 16);
     static const char *hx = "0123456789abcdef";
@@ -1289,10 +1291,26 @@ void KymCoreImpl::ingestRaw(const std::string &contentTopic, const std::string &
     // frame (the bug that made 0.7.7's v2 path dead on the wire while the pure convergence test passed).
     const std::string t = env.value("t", std::string());
     if (env.value("v", 0) == 2 && (t == "fp" || t == "ids" || t == "need")) {
+        const int64_t nowCu = (int64_t)std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        // Throttle ROUND-OPENING fps (full range: no lo/hi) to one answer per (peer, budget)
+        // per 10 s — every peer opens a round on connect + periodically, and each answer
+        // fans out into sub-range replies; a burst of openers must not multiply that.
+        if (t == "fp" && !env.contains("lo") && !env.contains("hi")) {
+            int64_t &last = b.lastRoundAnswer[kym::jget(env, "from", std::string())];
+            if (last != 0 && nowCu - last < 10000) return;
+            last = nowCu;
+        }
         loadPersistedLog(b);
         auto stp = logos_sync::catchup::respond(b.log, env, m_deviceId);
         for (auto &reply : stp.replies) sealAndSendJson(b, reply);
-        for (auto &ev : stp.serve) sealAndSend(b, ev);
+        // Cap one `need` answer at kMaxNeedServe events: a cold peer asking for everything
+        // gets it over several rounds (its periodic catch-up re-asks) instead of one flood.
+        size_t served = 0;
+        for (auto &ev : stp.serve) {
+            if (t == "need" && served >= kMaxNeedServe) break;
+            sealAndSend(b, ev); served++;
+        }
         publishBudget();
         return;
     }
@@ -1304,8 +1322,15 @@ void KymCoreImpl::ingestRaw(const std::string &contentTopic, const std::string &
     const std::string type = env["type"].get<std::string>();
     fprintf(stderr, "KYMRX type=%s seen=%ld opened=%ld\n", type.c_str(), m_rxSeen, m_rxOpened);
     if (type == "SYNC_REQ") {   // legacy whole-log path (kept for old peers)
-        if (!env.contains("from") || env["from"].get<std::string>() != m_deviceId)
+        // Whole-log re-serve at most once per 30 s per budget (shared with the store-seed
+        // burst's lastFullServe): several peers asking at once no longer each trigger a flood.
+        const int64_t nowSr = (int64_t)std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        if (kym::jget(env, "from", std::string()) != m_deviceId &&
+            (b.lastFullServe == 0 || nowSr - b.lastFullServe >= 30000)) {
+            b.lastFullServe = nowSr;
             for (const auto &e : b.log) sealAndSend(b, e);
+        }
         return;
     }
     if (type == "SUMMARY") {

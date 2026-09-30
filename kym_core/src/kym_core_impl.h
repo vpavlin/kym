@@ -158,6 +158,7 @@ private:
         int64_t wall = 0, ctr = 0;
         std::string viewMonth;                       // "" = live month, else the YYYY-MM viewed
         int64_t lastAutoResync = 0, lastSummaryTx = 0, lastFullServe = 0;
+        std::map<std::string, int64_t> lastRoundAnswer;   // peer id -> ms we last answered its round-opening fp
         long missing = 0;            // events WE lack per the last reconcile (d.aNeeds)
         int64_t lastReconcile = 0;   // ms of the last SUMMARY we processed
         // Store-seed burst: on each node-ready we publish the whole log a few times
