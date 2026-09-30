@@ -2,7 +2,7 @@
 // keypad (no OS keyboard round-trip), amount is the ONLY required field. Account,
 // date, cleared, category are all defaulted. One tap on Save appends a txn.create
 // and the balances re-fold instantly — never blocks on anything.
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Pressable,
@@ -14,13 +14,24 @@ import {
 } from "react-native";
 import * as ImagePicker from "expo-image-picker";
 import { useBudget } from "../state/BudgetContext";
-import { formatMoney, suggestCategory } from "../lib/engine";
-import { DEFAULT_ACCOUNT } from "../lib/budget";
+import { ASSET_TYPES, CURRENCIES, formatMoney, suggestCategory } from "../lib/engine";
+import { DEFAULT_ACCOUNT, LEGACY_DEFAULT_ACCOUNT } from "../lib/budget";
 import { recognizeReceipt } from "../lib/ocr";
 import { guessCategory } from "../lib/categoryGuess";
 import { theme } from "../ui/theme";
 
 const KEYS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "clr", "0", "del"];
+
+// Fraction digits the keypad types in for a currency: CZK (whole koruna) and JPY 0,
+// everything else 2. Typing "250" is 250 Kč, but 2.50 €.
+const ZERO_DECIMAL = new Set(["JPY", "KRW", "HUF"]);
+function entryDecimals(code: string): number {
+  const c = (CURRENCIES as Record<string, { decimals: number } | undefined>)[code];
+  if (c) return c.decimals;
+  return ZERO_DECIMAL.has(code) ? 0 : 2;
+}
+// Largest amount the keypad accepts, in whole currency units (99 999 999).
+const MAX_MAJOR = 99_999_999;
 
 // ISO "YYYY-MM-DD" (from the OCR heuristics) -> ms epoch for the txn date. Parsed
 // as local noon so a timezone offset can't roll it to the previous day. Falls
@@ -39,7 +50,12 @@ export function CaptureScreen({ goSetup }: { goSetup: () => void }) {
   // Expense (money out) or Income (money in → Ready to Assign). Income skips the
   // category — inflow always lands in the RTA pool.
   const [mode, setMode] = useState<"expense" | "income">("expense");
-  const [cents, setCents] = useState(0); // ATM-style entry: digits shift in from the right
+  // ATM-style entry: digits shift in from the right, in the capture currency's MINOR
+  // unit (see entryDecimals). Held as milliunits so switching to an account with a
+  // different currency keeps the value.
+  const [amountMilli, setAmountMilli] = useState(0);
+  const savingRef = useRef(false);   // synchronous double-tap guard (state lags a frame)
+  const [saving, setSaving] = useState(false);
   const [accountId, setAccountId] = useState<string | null>(null);
   const [categoryId, setCategoryId] = useState<string | null>(null);
   const [cleared, setCleared] = useState(false);
@@ -94,8 +110,9 @@ export function CaptureScreen({ goSetup }: { goSetup: () => void }) {
       const fields = await recognizeReceipt(uri);
 
       if (fields.amount && fields.amount > 0) {
-        // cents = milliunits / 10 (1 cent = 10 milli). Cap mirrors the keypad.
-        setCents(Math.min(Math.round(fields.amount / 10), 9_999_999));
+        // Rounded to what the keypad can show in this currency; cap mirrors the keypad.
+        const f = 10 ** (3 - decimals);
+        setAmountMilli(Math.min(Math.round(fields.amount / f), MAX_MAJOR * 10 ** decimals) * f);
       }
       setReceiptMemo(fields.merchant ?? null);
       setReceiptDate(fields.date ? isoToEpoch(fields.date) : null);
@@ -138,16 +155,24 @@ export function CaptureScreen({ goSetup }: { goSetup: () => void }) {
     }
   };
 
-  // Default account = Checking if present, else the first account.
+  // Income must land in an on-budget ASSET account (checking/savings/cash) — booked to
+  // a card or a tracking account it would never reach Ready to Assign (the fold ignores
+  // it), so income mode only offers those. Expense mode offers every open account.
+  const incomeAccounts = accounts.filter((a) => a.onBudget && ASSET_TYPES.has(a.type));
+  const pickable = mode === "income" ? incomeAccounts : accounts;
+  // Default account = Checking if present, else the first pickable one. A choice that
+  // isn't pickable in this mode (a card picked, then Income) falls back to the default.
   const activeAccount =
-    accountId ??
-    (accounts.find((a) => a.id === DEFAULT_ACCOUNT)?.id ?? accounts[0]?.id ?? null);
+    (accountId && pickable.some((a) => a.id === accountId) ? accountId : null) ??
+    (pickable.find((a) => a.id === DEFAULT_ACCOUNT || a.id === LEGACY_DEFAULT_ACCOUNT)?.id ??
+      pickable[0]?.id ??
+      null);
 
-  const amountMilli = cents * 10; // 1 cent = 10 milliunits
   // The capture is denominated in the chosen account's currency (a EUR tracking
   // account captures in EUR); fall back to the budget currency.
   const activeCurrency =
     accounts.find((a) => a.id === activeAccount)?.currency || budgetCurrency;
+  const decimals = entryDecimals(activeCurrency);
   const display = useMemo(
     () => formatMoney(amountMilli, activeCurrency),
     [amountMilli, activeCurrency]
@@ -156,9 +181,14 @@ export function CaptureScreen({ goSetup }: { goSetup: () => void }) {
   const styles = useMemo(() => makeStyles(currentBudgetColor), [currentBudgetColor]);
 
   const press = (k: string) => {
-    if (k === "del") setCents((c) => Math.floor(c / 10));
-    else if (k === "clr") setCents(0);
-    else setCents((c) => Math.min(c * 10 + Number(k), 9_999_999)); // cap ~ $99,999.99
+    const f = 10 ** (3 - decimals);            // milliunits per minor unit (1 Kč = 1000, 1 ct = 10)
+    const cap = MAX_MAJOR * 10 ** decimals;    // in minor units
+    setAmountMilli((m) => {
+      const units = Math.round(m / f);
+      if (k === "del") return Math.floor(units / 10) * f;
+      if (k === "clr") return 0;
+      return Math.min(units * 10 + Number(k), cap) * f;
+    });
   };
 
   // Manual capture: when the user finishes typing a payee, offer a learned
@@ -171,10 +201,24 @@ export function CaptureScreen({ goSetup }: { goSetup: () => void }) {
     if (learned) setCategoryId(learned.categoryId);
   };
 
-  const canSave = amountMilli > 0 && !!activeAccount;
+  const canSave = amountMilli > 0 && !!activeAccount && !saving;
 
   const save = async () => {
-    if (!canSave || !activeAccount) return;
+    if (!canSave || !activeAccount || savingRef.current) return;
+    savingRef.current = true;
+    setSaving(true);
+    try {
+      await doSave(activeAccount);
+    } catch (e: any) {
+      setFlash(`Not saved: ${e?.message ?? String(e)}`);
+      setTimeout(() => setFlash(null), 3000);
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
+  };
+
+  const doSave = async (activeAccount: string) => {
     const memo = receiptMemo ?? (payee.trim() ? payee.trim() : undefined);
     const acctName = accounts.find((a) => a.id === activeAccount)?.name ?? "account";
     if (mode === "income") {
@@ -194,7 +238,7 @@ export function CaptureScreen({ goSetup }: { goSetup: () => void }) {
       const catName = categories.find((c) => c.id === categoryId)?.name ?? "Uncategorized";
       setFlash(`Saved ${formatMoney(amountMilli, activeCurrency)} · ${catName} · ${acctName}`);
     }
-    setCents(0);
+    setAmountMilli(0);
     setCategoryId(null);
     setCleared(false);
     setPayee("");
@@ -327,7 +371,11 @@ export function CaptureScreen({ goSetup }: { goSetup: () => void }) {
           ))}
         </ScrollView>
       ) : (
-        <Text style={styles.incomeNote}>→ goes to Ready to Assign</Text>
+        <Text style={styles.incomeNote}>
+          {incomeAccounts.length
+            ? "→ goes to Ready to Assign"
+            : "Income needs an on-budget checking, savings or cash account — add one in Setup."}
+        </Text>
       )}
 
       {/* Account + cleared row. */}
@@ -337,7 +385,7 @@ export function CaptureScreen({ goSetup }: { goSetup: () => void }) {
         style={styles.chipRow}
         contentContainerStyle={styles.chipRowContent}
       >
-        {accounts.map((a) => (
+        {pickable.map((a) => (
           <Chip
             key={a.id}
             label={a.name}
