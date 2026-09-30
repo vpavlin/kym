@@ -284,6 +284,8 @@ declare module "@kym/engine" {
     events: KymEvent[],
     hint?: { payee?: string; memo?: string }
   ): CategorySuggestion | null;
+  /** Category ids with history (assign/move, txn create/edit, splits) — archive-only, never delete. */
+  export function categoriesWithHistory(events: KymEvent[]): Set<string>;
 
   export interface NetWorthRow {
     id: string;

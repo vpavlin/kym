@@ -12,6 +12,8 @@
 #include <cstdint>
 #include <optional>
 #include <stdexcept>
+#include <cmath>
+#include <cstdio>
 
 // The event envelope, HLC and CRDT merge now come from the shared logos-sync
 // library (vendored under logos_sync/) — they were already byte-identical to
@@ -48,6 +50,37 @@ inline T jget(const nlohmann::json& j, const char* key, T def) {
   try { return it->template get<T>(); } catch (...) { return def; }
 }
 inline std::string jget(const nlohmann::json& j, const char* key, const char* def) { return jget<std::string>(j, key, std::string(def)); }
+
+// A txn `date` as the fold reads it: a string as-is; an epoch-ms number (old phone
+// reconcile adjustments wrote Date.now()) as its UTC ISO timestamp, so it buckets into
+// the same month engine.mjs monthOf(number) gives (UTC — every device agrees); anything
+// else "". Mirrors txnMonth() in engine.mjs.
+inline std::string jdate(const nlohmann::json& j, const char* key) {
+  if (!j.is_object()) return "";
+  auto it = j.find(key);
+  if (it == j.end()) return "";
+  if (it->is_string()) return it->get<std::string>();
+  if (!it->is_number()) return "";
+  const double ms = it->get<double>();
+  if (!(ms > -8.64e15 && ms < 8.64e15)) return "";            // JS Date range; NaN/inf → ""
+  int64_t t = (int64_t)std::floor(ms), secs = t / 1000, rem = t % 1000;
+  if (rem < 0) { rem += 1000; secs -= 1; }
+  int64_t days = secs / 86400, sod = secs % 86400;
+  if (sod < 0) { sod += 86400; days -= 1; }
+  // civil_from_days (H. Hinnant) — no gmtime, so it's portable and thread-safe.
+  days += 719468;
+  const int64_t era = (days >= 0 ? days : days - 146096) / 146097;
+  const int64_t doe = days - era * 146097;
+  const int64_t yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+  const int64_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+  const int64_t mp = (5 * doy + 2) / 153;
+  const int64_t d = doy - (153 * mp + 2) / 5 + 1, m = mp < 10 ? mp + 3 : mp - 9;
+  const int64_t y = yoe + era * 400 + (m <= 2);
+  char buf[128];
+  std::snprintf(buf, sizeof buf, "%04lld-%02lld-%02lldT%02lld:%02lld:%02lld.%03lldZ", (long long)y, (long long)m,
+                (long long)d, (long long)(sod / 3600), (long long)(sod / 60 % 60), (long long)(sod % 60), (long long)rem);
+  return buf;
+}
 
 struct Split { std::string categoryId; Money amount; };
 
@@ -231,9 +264,14 @@ inline BudgetState computeState(const std::vector<Event>& rawEvents, std::option
   std::vector<std::string> txnOrder;
   auto applyFields = [](TxnView& v, const Event& e) {
     if (e.payload.contains("accountId")) v.accountId = jget(e.payload, "accountId", std::string());
-    if (e.payload.contains("date")) v.date = jget(e.payload, "date", std::string());
+    if (e.payload.contains("date")) v.date = jdate(e.payload, "date");
     if (e.payload.contains("amount")) v.amount = jget(e.payload, "amount", (Money)0);
-    if (e.payload.contains("categoryId")) { v.categoryId = jget(e.payload, "categoryId", std::string()); v.hasCategory = true; }
+    // `categoryId: null` (phone "uncategorized", or an edit clearing it) = NO category —
+    // only a string is a leg. Mirrors txnCategoryLegs in engine.mjs.
+    if (e.payload.contains("categoryId")) {
+      v.hasCategory = e.payload.at("categoryId").is_string();
+      v.categoryId = jget(e.payload, "categoryId", std::string());
+    }
     if (e.payload.contains("transferId")) v.transferId = jget(e.payload, "transferId", std::string());
     if (e.payload.contains("splits") && e.payload.at("splits").is_array()) {
       v.splits.clear();
@@ -363,6 +401,26 @@ inline BudgetState computeState(const std::vector<Event>& rawEvents, std::option
   st.cashOverspending = cashOverspending;
   st.readyToAssign = income - totalAssigned - cashOverspending;
   return st;
+}
+
+// Categories that carry history — any assign/move, any txn.create OR txn.edit that
+// puts a txn in them, and any split leg (on any event). Such a category can only be
+// archived, never deleted (deleting would orphan money). An edit counts because a txn
+// re-categorized INTO the category moves its activity there. Mirrors
+// categoriesWithHistory in engine.mjs (the phone's delete guard).
+inline std::set<std::string> categoryHistory(const std::vector<Event>& log) {
+  std::set<std::string> out;
+  auto add = [&](const nlohmann::json& j, const char* k) {
+    if (j.is_object() && j.contains(k) && j.at(k).is_string()) out.insert(j.at(k).get<std::string>());
+  };
+  for (const auto& e : log) {
+    if (e.type == "assign") add(e.payload, "categoryId");
+    else if (e.type == "move") { add(e.payload, "fromCategoryId"); add(e.payload, "toCategoryId"); }
+    else if (e.type == "txn.create" || e.type == "txn.edit") add(e.payload, "categoryId");
+    if (e.payload.is_object() && e.payload.contains("splits") && e.payload.at("splits").is_array())
+      for (const auto& sp : e.payload.at("splits")) add(sp, "categoryId");
+  }
+  return out;
 }
 
 struct Invariant { Money assets, categoriesAvail, readyToAssign, rhs, diff; bool ok; };

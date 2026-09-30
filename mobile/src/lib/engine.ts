@@ -8,6 +8,7 @@ export {
   checkInvariant,
   mergeEvents,
   suggestCategory,
+  categoriesWithHistory,
   netWorth,
   spendingReport,
 } from "@kym/engine";

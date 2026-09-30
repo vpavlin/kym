@@ -15,6 +15,7 @@ import {
   Clock,
   computeState,
   checkInvariant,
+  categoriesWithHistory,
   ev,
 } from "../lib/engine";
 import type { BudgetState, Invariant, KymEvent } from "../lib/engine";
@@ -687,16 +688,9 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
   // is orphaned. Mirrors kym_core deleteCategory's guard.
   const deleteCategory = useCallback(
     async (categoryId: string) => {
-      const hasHistory = eventsRef.current.some((e) => {
-        const p: any = e.payload;
-        return (
-          (e.type === "assign" && p?.categoryId === categoryId) ||
-          (e.type === "move" && (p?.fromCategoryId === categoryId || p?.toCategoryId === categoryId)) ||
-          (e.type === "txn.create" && p?.categoryId === categoryId) ||
-          (Array.isArray(p?.splits) && p.splits.some((s: any) => s?.categoryId === categoryId))
-        );
-      });
-      if (hasHistory) throw new Error("This category has money or transactions — archive it instead.");
+      // Shared with desktop (engine categoriesWithHistory == kym_engine.hpp categoryHistory):
+      // assign/move, txn.create AND txn.edit (a txn re-categorized into it), and splits.
+      if (categoriesWithHistory(eventsRef.current).has(categoryId)) throw new Error("This category has money or transactions — archive it instead.");
       await commit([ev.categoryDelete(clock().send(), { categoryId })]);
     },
     [commit]

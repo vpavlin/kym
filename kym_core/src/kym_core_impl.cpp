@@ -276,16 +276,9 @@ std::string KymCoreImpl::deleteCategory(std::string name) {
     std::string cid = findCategoryId(name);
     if (cid.empty()) return "unknown category: " + name;
     // Refuse if the category has any assignment / move / transaction — deleting it
-    // then would orphan money and break the zero-based invariant.
-    for (const auto &e : cur().log) {
-        bool refs = false;
-        if (e.type == "assign" && e.payload.contains("categoryId") && e.payload.at("categoryId") == cid) refs = true;
-        else if (e.type == "move" && ((e.payload.contains("fromCategoryId") && e.payload.at("fromCategoryId") == cid) ||
-                                      (e.payload.contains("toCategoryId") && e.payload.at("toCategoryId") == cid))) refs = true;
-        else if (e.type == "txn.create" && e.payload.contains("categoryId") && e.payload.at("categoryId") == cid) refs = true;
-        if (e.payload.contains("splits")) for (const auto &sp : e.payload.at("splits")) if (sp.value("categoryId", std::string()) == cid) refs = true;
-        if (refs) return "\"" + name + "\" has money or transactions — move them out first";
-    }
+    // then would orphan money and break the zero-based invariant. A txn.edit that
+    // RE-categorized a txn into it counts too (and splits on any event).
+    if (kym::categoryHistory(cur().log).count(cid)) return "\"" + name + "\" has money or transactions — move them out first";
     auto ev = baseEvent("category.delete", nextHlc());
     ev.payload["categoryId"] = cid;
     pushEvent(ev, true);
@@ -347,9 +340,9 @@ std::string KymCoreImpl::editTxn(std::string txnId, std::string patchJson) {
     // merge once the create lands — the fold is order-independent by design.
     std::string curCat;
     for (const auto &e : cur().log) {
-        if (!e.payload.contains("txnId") || e.payload.at("txnId") != txnId) continue;
+        if (kym::jget(e.payload, "txnId", std::string()) != txnId) continue;
         if ((e.type == "txn.create" || e.type == "txn.edit") && e.payload.contains("categoryId"))
-            curCat = e.payload.at("categoryId");
+            curCat = kym::jget(e.payload, "categoryId", std::string());   // null (phone "uncategorized") -> ""
     }
 
     // A txn.edit carries ONLY the changed keys — the fold applies key-by-key, so
@@ -520,7 +513,7 @@ std::string KymCoreImpl::logFingerprint() {
 // ---- name maps + budget JSON ----------------------------------------------
 void KymCoreImpl::rebuildNameMaps() {
     auto sv = [](const kym::Event &e, const char *k) -> std::string {
-        return e.payload.contains(k) ? e.payload.value(k, std::string()) : std::string();
+        return kym::jget(e.payload, k, std::string());   // null / wrong type -> "" (never throws)
     };
     cur().accountName.clear(); cur().categoryName.clear(); cur().groupName.clear();
     cur().categoryGroup.clear(); cur().accountCurrency.clear(); cur().groupOrder.clear();
@@ -621,13 +614,7 @@ void KymCoreImpl::publishBudgetUnsafe() {
     // Categories that carry any assignment/transaction history — those can only be
     // ARCHIVED (hidden, history preserved), never deleted; a history-free category
     // can be deleted outright. The view uses canDelete to pick delete vs archive.
-    std::set<std::string> catsWithHistory;
-    for (const auto &e : cur().log) {
-        if (e.type == "assign" && e.payload.contains("categoryId")) catsWithHistory.insert(e.payload.at("categoryId"));
-        else if (e.type == "move") { if (e.payload.contains("fromCategoryId")) catsWithHistory.insert(e.payload.at("fromCategoryId")); if (e.payload.contains("toCategoryId")) catsWithHistory.insert(e.payload.at("toCategoryId")); }
-        else if (e.type == "txn.create" && e.payload.contains("categoryId")) catsWithHistory.insert(e.payload.at("categoryId"));
-        if (e.payload.contains("splits")) for (const auto &sp : e.payload.at("splits")) catsWithHistory.insert(sp.value("categoryId", std::string()));
-    }
+    const std::set<std::string> catsWithHistory = kym::categoryHistory(cur().log);
     json groups = json::array();
     for (const auto &gid : cur().groupOrder) {
         json cats = json::array();
@@ -719,14 +706,16 @@ void KymCoreImpl::publishBudgetUnsafe() {
         struct Tx { std::string date, acctId, catId, author; long long amount = 0; bool del = false, seen = false; };
         std::map<std::string, Tx> txs; std::vector<std::string> order;
         auto apply = [](Tx &t, const kym::Event &e) {
-            if (e.payload.contains("date")) t.date = e.payload.at("date");
-            if (e.payload.contains("accountId")) t.acctId = e.payload.at("accountId");
-            if (e.payload.contains("categoryId")) t.catId = e.payload.at("categoryId");
-            if (e.payload.contains("author")) t.author = e.payload.at("author");   // last device to touch it
-            if (e.payload.contains("amount")) t.amount = (long long)e.payload.at("amount");
+            // Tolerant reads (kym::jget/jdate): a phone's `categoryId: null` / numeric date
+            // must not throw here and take the whole budget JSON down with it.
+            if (e.payload.contains("date")) t.date = kym::jdate(e.payload, "date");
+            if (e.payload.contains("accountId")) t.acctId = kym::jget(e.payload, "accountId", std::string());
+            if (e.payload.contains("categoryId")) t.catId = kym::jget(e.payload, "categoryId", std::string());
+            if (e.payload.contains("author")) t.author = kym::jget(e.payload, "author", std::string());   // last device to touch it
+            if (e.payload.contains("amount")) t.amount = kym::jget(e.payload, "amount", (long long)0);
         };
         for (const auto &e : cur().log) {
-            const std::string id = e.payload.value("txnId", e.id);
+            const std::string id = kym::jget(e.payload, "txnId", e.id);
             if (e.type == "txn.create") { Tx &t = txs[id]; if (!t.seen) { t.seen = true; order.push_back(id); } apply(t, e); }
             else if (e.type == "txn.edit" && txs.count(id)) apply(txs[id], e);
             else if (e.type == "txn.delete" && txs.count(id)) txs[id].del = true;

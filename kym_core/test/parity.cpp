@@ -4,6 +4,7 @@
 #include "../src/kym_engine.hpp"
 #include <iostream>
 #include <functional>
+#include <fstream>
 
 using namespace kym;
 
@@ -177,6 +178,57 @@ int main() {
     ev2.push_back(memberAdd("bob", "mallory", "editor")); // bob is editor, not admin → dropped
     auto s3 = computeState(ev2);
     ok(s3.members.size() == 3, "6.editor-cannot-add-member");
+  }
+
+  // 7. phone-shaped events (null categoryId / targetMonth / date / amount, epoch-ms
+  //    dates, a null-category edit) — the SAME fixture + expectation the JS fold checks
+  //    in packages/engine/test/phone-shaped.test.mjs. Neither fold may throw.
+  {
+    std::ifstream f("../../packages/engine/test/fixtures/phone-shaped.json");
+    ok((bool)f, "7.fixture-readable (run from kym_core/test)");
+    if (f) {
+      nlohmann::json fx = nlohmann::json::parse(f);
+      std::vector<Event> ev;
+      for (const auto& j : fx["events"]) ev.push_back(eventFromJson(j));
+      const auto& x = fx["expect"];
+      auto s = computeState(ev);
+      ok(s.currentMonth == x["currentMonth"].get<std::string>(), "7.currentMonth");
+      for (auto& [k, v] : x["balances"].items()) eq(s.balances[k], v.get<Money>(), "7.balance " + k);
+      for (auto& [k, v] : x["categoryAvailable"].items()) eq(s.categoryAvailable[k], v.get<Money>(), "7.available " + k);
+      for (auto& [k, v] : x["creditCardPayments"].items()) eq(s.creditCardPayments[k], v.get<Money>(), "7.ccp " + k);
+      for (auto& [k, v] : x["activity"].items()) {
+        const auto bar = k.find('|');
+        const std::string c = k.substr(0, bar), m = k.substr(bar + 1);
+        Money act = 999999999;
+        for (const auto& r : s.categoryMonths) if (r.categoryId == c && r.month == m) act = r.activity;
+        eq(act, v.get<Money>(), "7.activity " + k);
+      }
+      eq(s.income, x["income"].get<Money>(), "7.income");
+      eq(s.totalAssigned, x["totalAssigned"].get<Money>(), "7.totalAssigned");
+      eq(s.cashOverspending, x["cashOverspending"].get<Money>(), "7.cashOverspending");
+      eq(s.readyToAssign, x["readyToAssign"].get<Money>(), "7.rta");
+      for (auto& [k, v] : x["targetNeeded"].items()) eq(s.targetProgress[k].needed, v.get<Money>(), "7.target " + k);
+      ok(checkInvariant(s).ok == x["invariantOk"].get<bool>(), "7.invariant");
+      std::vector<Event> rev(ev.rbegin(), ev.rend());
+      eq(computeState(rev).readyToAssign, x["readyToAssign"].get<Money>(), "7.converge-rta");
+      // jdate(): epoch ms renders as the UTC ISO timestamp JS toISOString() gives.
+      nlohmann::json dj = {{"date", 1784541600000LL}};
+      ok(jdate(dj, "date") == "2026-07-20T10:00:00.000Z", "7.jdate-epoch");
+    }
+  }
+
+  // 8. delete guard: categoryHistory counts txn.edit re-categorization + splits, and
+  //    ignores null categoryIds (same log/answer as phone-shaped.test.mjs).
+  {
+    auto mk = [](const std::string& type, nlohmann::json p) { Event e; e.id = "h" + std::to_string(T); e.type = type; e.hlc = h("d"); e.payload = p; return e; };
+    std::vector<Event> log = {
+      mk("category.create", {{"categoryId", "cat:empty"}, {"groupId", "g"}, {"name", "Empty"}}),
+      mk("txn.create", {{"txnId", "t"}, {"accountId", "x"}, {"amount", -1}, {"date", "2026-07-01"}, {"categoryId", nullptr}}),
+      mk("txn.edit", {{"txnId", "t"}, {"categoryId", "cat:edited"}}),
+      mk("txn.edit", {{"txnId", "t"}, {"splits", {{{"categoryId", "cat:split"}, {"amount", -1}}}}}),
+      mk("move", {{"fromCategoryId", "cat:from"}, {"toCategoryId", "cat:to"}, {"month", "2026-07"}, {"amount", 1}}),
+    };
+    ok(categoryHistory(log) == std::set<std::string>{"cat:edited", "cat:from", "cat:split", "cat:to"}, "8.categoryHistory");
   }
 
   std::cout << (failures ? "PARITY FAILED" : "PARITY OK") << " — " << (checks - failures) << "/" << checks << " checks passed\n";
