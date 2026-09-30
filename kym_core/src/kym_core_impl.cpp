@@ -54,6 +54,23 @@ std::string slug(const std::string &name) {
     while (!s.empty() && s.back() == '-') s.pop_back();
     return s.empty() ? uuidHex().substr(0, 8) : s;
 }
+// A NEW collision-free entity id: `base` ("acct:"/"cat:"/"grp:" + slug) unless any
+// create event in the log ever used it (incl. deleted entities, so a late delete can't
+// hit the new one), else base + "-" + 4 random hex. Non-ASCII names all slug alike
+// ("Jídlo"/"Jádlo" -> "j-dlo"), and a same-slug create used to silently REPLACE the
+// earlier entity (same id, LWW). Existing ids are never re-derived. Mirrors mobile
+// newEntityId (budget.ts).
+std::string uniqueEntityId(const std::vector<kym::Event> &log, const std::string &base) {
+    std::set<std::string> taken;
+    for (const auto &e : log) {
+        const char *k = e.type == "account.create" ? "accountId" : e.type == "category.create" ? "categoryId"
+                      : e.type == "group.create" ? "groupId" : nullptr;
+        if (k) taken.insert(kym::jget(e.payload, k, std::string()));
+    }
+    std::string id = base;
+    while (taken.count(id)) id = base + "-" + uuidHex().substr(0, 4);
+    return id;
+}
 std::string ymd() {  // YYYY-MM-DD (UTC)
     std::time_t t = std::time(nullptr); std::tm tm = *std::gmtime(&t);
     char b[16]; std::snprintf(b, sizeof b, "%04d-%02d-%02d", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday);
@@ -194,7 +211,7 @@ KymCoreImpl::~KymCoreImpl() {
 // ---- event builders --------------------------------------------------------
 std::string KymCoreImpl::ensureGroup(const std::string &name) {
     for (auto &kv : cur().groupName) if (ciEq(kv.second, name)) return kv.first;
-    std::string gid = "grp:" + slug(name);
+    std::string gid = uniqueEntityId(cur().log, "grp:" + slug(name));
     auto e = baseEvent("group.create", nextHlc());
     e.payload["groupId"] = gid; e.payload["name"] = name;
     pushEvent(e, true);
@@ -202,7 +219,7 @@ std::string KymCoreImpl::ensureGroup(const std::string &name) {
     return gid;
 }
 std::string KymCoreImpl::addAccountEv(const std::string &name, const std::string &type, kym::Money bal, const std::string &currency) {
-    std::string id = "acct:" + slug(name);
+    std::string id = uniqueEntityId(cur().log, "acct:" + slug(name));
     std::string ccy = currency.empty() ? cur().currency : currency;
     for (auto &c : ccy) c = std::toupper(c);
     auto e = baseEvent("account.create", nextHlc());
@@ -215,7 +232,7 @@ std::string KymCoreImpl::addAccountEv(const std::string &name, const std::string
 }
 std::string KymCoreImpl::addCategoryEv(const std::string &name, const std::string &group) {
     std::string gid = ensureGroup(group.empty() ? "General" : group);
-    std::string id = "cat:" + slug(name);
+    std::string id = uniqueEntityId(cur().log, "cat:" + slug(name));
     auto e = baseEvent("category.create", nextHlc());
     e.payload["categoryId"] = id; e.payload["groupId"] = gid; e.payload["name"] = name;
     pushEvent(e, true);
@@ -251,6 +268,8 @@ std::string KymCoreImpl::findCategoryId(const std::string &name) const {
 // ---- public mutations ------------------------------------------------------
 std::string KymCoreImpl::addAccount(std::string name, std::string type, std::string balance) {
     if (name.empty()) return "account name required";
+    // Refuse a duplicate name (a second "Checking" used to replace the first).
+    if (!findAccountId(name).empty()) return "an account named \"" + name + "\" already exists";
     addAccountEv(name, type.empty() ? "checking" : type, toMilli(balance));
     publishBudget(); return m_budgetJson;
 }
@@ -261,6 +280,7 @@ std::string KymCoreImpl::addGroup(std::string name) {
 }
 std::string KymCoreImpl::addCategory(std::string name, std::string group) {
     if (name.empty()) return "category name required";
+    if (!findCategoryId(name).empty()) return "a category named \"" + name + "\" already exists";
     addCategoryEv(name, group); publishBudget(); return m_budgetJson;
 }
 std::string KymCoreImpl::deleteCategory(std::string name) {
@@ -1105,6 +1125,7 @@ void KymCoreImpl::bootstrapDelivery() {
                 if (const char *seed = std::getenv("KYM_HUB_SEED_CATEGORY")) {
                     std::string name = seed, cid = "cat:" + slug(name);
                     if (!cur().categoryName.count(cid)) addCategory(name, "Everyday");
+                    if (!findCategoryId(name).empty()) cid = findCategoryId(name);   // ids are no longer purely slug-derived
                     cur().seedCatId = cid; cur().seedTicks = 8;
                     fprintf(stderr, "KYM hub seeded category '%s' (%s)\n", name.c_str(), cid.c_str());
                 }
