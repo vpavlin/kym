@@ -26,6 +26,7 @@ export {
   ev,
   EventType,
   AccountType,
+  ASSET_TYPES,
   RTA_INFLOW,
   ccpCategoryId,
   isCcp,

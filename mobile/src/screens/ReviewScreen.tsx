@@ -18,6 +18,7 @@ import { formatMoney, suggestCategory } from "../lib/engine";
 import { theme } from "../ui/theme";
 import { useToast } from "../ui/Toast";
 import type { TxnView } from "../lib/budget";
+import { txnDate } from "../lib/budget";
 
 export function ReviewScreen() {
   const {
@@ -179,7 +180,7 @@ export function ReviewScreen() {
                 </Text>
                 {t.memo ? <Text style={styles.note} numberOfLines={1}>{t.memo}</Text> : null}
                 <Text style={styles.meta}>
-                  {acctName(t.accountId)} · {new Date(t.date as any).toLocaleDateString()} ·{" "}
+                  {acctName(t.accountId)} · {txnDate(t.date).toLocaleDateString()} ·{" "}
                   {t.cleared === "cleared" ? "cleared" : "uncleared"}
                   {(t as any).author ? ` · ${(t as any).author}` : ""}
                 </Text>

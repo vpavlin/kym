@@ -19,14 +19,19 @@ import {
   ev,
 } from "../lib/engine";
 import type { BudgetState, Invariant, KymEvent } from "../lib/engine";
-import { AccountType, DEFAULT_CURRENCY, RTA_INFLOW } from "../lib/engine";
+import { AccountType, ASSET_TYPES, DEFAULT_CURRENCY, RTA_INFLOW } from "../lib/engine";
 import { getDeviceId } from "../lib/device";
+import { Alert, AppState } from "react-native";
 import {
   loadRegistry,
   saveRegistry,
   loadBudgetLog,
-  appendBudgetEvents,
-  appendBudgetEventsToStorage,
+  readBudgetLog,
+  withBudgetLock,
+  appendStoredEvents,
+  appendToStoredLog,
+  rewriteStoredLog,
+  clearStoredLog,
   clearBudgetLog,
   newBudgetId,
   budgetColorForSeed,
@@ -34,7 +39,7 @@ import {
   type BudgetMeta,
 } from "../lib/budgets";
 import { topicFor, deriveIdentity, decodeSecret } from "../lib/identity";
-import { acctId, buildSeedEvents, catId, grpId, listTransactions } from "../lib/budget";
+import { buildSeedEvents, listTransactions, localMonth, localYmd, newEntityId, takenIds } from "../lib/budget";
 import type { TxnView } from "../lib/budget";
 import { loadSettings, saveSettings } from "../lib/settings";
 import {
@@ -42,7 +47,6 @@ import {
   ensureNode,
   sendEnvelope,
   getPeerCount,
-  sendSyncReq,
   sendCatchupMsg,
   startReceiving,
   refreshRoutes,
@@ -136,6 +140,45 @@ const BudgetContext = createContext<BudgetContextValue | null>(null);
 
 const EMPTY_STATE = computeState([]);
 
+// A peer can send anything. Only events with the envelope the fold/merge relies on
+// (string id + type, an HLC with a string dev + numeric wall, an object payload) are
+// admitted to the log — a shapeless one would otherwise throw in every fold forever.
+function isWellFormed(e: any): e is KymEvent {
+  return (
+    !!e && typeof e.id === "string" && e.id !== "" && typeof e.type === "string" &&
+    !!e.hlc && typeof e.hlc.dev === "string" && typeof e.hlc.wall === "number" &&
+    !!e.payload && typeof e.payload === "object"
+  );
+}
+
+// Does the log touch a month AFTER `asOf` (a future assignment / move / txn)? Only
+// then does the invariant need its own full (no-asOf) fold — see `invariant` below.
+function touchesAfter(events: KymEvent[], asOf: string): boolean {
+  for (const e of events) {
+    const p: any = e.payload;
+    if (!p) continue;
+    if (typeof p.month === "string" && p.month > asOf) return true;
+    if (typeof p.date === "string" && p.date.slice(0, 7) > asOf) return true;
+  }
+  return false;
+}
+
+function reportUnreadable(e: unknown) {
+  console.warn("[kym] budget log unreadable:", e);
+  Alert.alert(
+    "Couldn't read this budget",
+    "Its saved data could not be read, so KYM will not change or overwrite it. Restart the app to retry.\n\n" +
+      String((e as any)?.message ?? e)
+  );
+}
+
+// Most events served in answer to ONE v2 `need` frame (kym_core kMaxNeedServe).
+const MAX_NEED_SERVE = 500;
+
+// Node bring-up retry: exponential backoff 5 s → 60 s cap, retried forever (and
+// immediately when the app returns to the foreground).
+const retryDelayMs = (attempt: number) => Math.min(60_000, 5_000 * 2 ** Math.min(attempt, 4));
+
 export function BudgetProvider({ children }: { children: React.ReactNode }) {
   const [ready, setReady] = useState(false);
   const [deviceId, setDeviceId] = useState("dev-loading");
@@ -185,7 +228,23 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
   // paired). Gates best-effort sends so we don't retry node bring-up on capture
   // when we're on the emulator/web or unpaired.
   const syncActiveRef = useRef(false);
-  const retryCountRef = useRef(0);   // bounds the node bring-up retry (no tight loop)
+  const retryCountRef = useRef(0);   // node bring-up attempts since the last success (drives backoff)
+  // Budgets whose stored log failed to READ (vs. missing): writes to them are refused
+  // until a re-read succeeds. Budgets whose last disk append failed: the next write
+  // rewrites the whole log from memory so nothing stays unpersisted.
+  const unreadableRef = useRef(new Set<string>());
+  const needsRewriteRef = useRef(new Set<string>());
+  // Bumped by every budget switch; a slower in-flight switch that lost the race bails.
+  const switchSeqRef = useRef(0);
+  // The live CALENDAR month (local time), like desktop's currentMonth(): the view
+  // folds asOf it, and Assign/Move default to it. Refreshed on foreground + each minute.
+  const [calMonth, setCalMonth] = useState<string>(() => localMonth());
+  useEffect(() => {
+    const tick = () => setCalMonth((m) => (m === localMonth() ? m : localMonth()));
+    const h = setInterval(tick, 60_000);
+    const sub = AppState.addEventListener("change", (st) => { if (st === "active") tick(); });
+    return () => { clearInterval(h); sub.remove(); };
+  }, []);
 
   // Boot: resolve device id, build the HLC clock, load the persisted log + settings.
   useEffect(() => {
@@ -193,7 +252,15 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
     (async () => {
       const dev = await getDeviceId();
       const reg = await loadRegistry();     // migrates a legacy single log into "main"
-      const log = await loadBudgetLog(reg.current);
+      let log: KymEvent[] = [];
+      try {
+        log = await loadBudgetLog(reg.current);
+      } catch (e) {
+        // A FAILED read (not a missing log) — render empty and refuse writes to this
+        // budget until a read succeeds, so we never overwrite a log we couldn't read.
+        unreadableRef.current.add(reg.current);
+        reportUnreadable(e);
+      }
       const settings = await loadSettings();
       if (!alive) return;
       clockRef.current = new Clock(dev);
@@ -251,45 +318,117 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
   // pure projection of the log via the same engine the desktop module runs.
   // Live folded state for callbacks registered once (addCategory needs the
   // current group list to avoid re-creating a group that already exists).
+  // The fold is guarded: one malformed peer event must not crash the app at every
+  // launch. On a throw we retry on the well-formed subset, then fall back to the last
+  // good state OF THIS BUDGET (never another budget's), logging the error.
   const stateRef = useRef(EMPTY_STATE);
-  const state = useMemo(
-    () => (events.length ? computeState(events) : EMPTY_STATE),
-    [events]
-  );
-  stateRef.current = state;
-  const invariant = useMemo(() => checkInvariant(state), [state]);
-  const txns = useMemo(() => listTransactions(events), [events]);
-
-  // Append events (local or remote) through the deduping log. Uses eventsRef so it
-  // is stable and always sees the latest log — safe to call from the receive
-  // callback registered once at mount. appendEvents returns the same array
-  // reference when nothing new was added (dedup), so we only re-render on a change.
-  const ingest = useCallback(async (incoming: KymEvent[]): Promise<KymEvent[]> => {
-    const before = eventsRef.current;
-    const next = await appendBudgetEvents(currentBudgetIdRef.current, before, incoming);
-    if (next !== before) {
-      // ADR 0013: advance the clock past NEWLY-ingested REMOTE events so a
-      // subsequent local edit sorts after them (fixes silent LWW revert). Only
-      // new + non-local ids — re-received dupes must not bump the clock.
-      const clk = clockRef.current;
-      if (clk) {
-        const known = new Set(before.map((e) => e.id));
-        for (const e of incoming) {
-          if (e && e.hlc && e.hlc.dev !== deviceIdRef.current && !known.has(e.id)) clk.receive(e.hlc);
-        }
+  const lastGoodRef = useRef<{ budgetId: string; state: BudgetState }>({ budgetId: "", state: EMPTY_STATE });
+  const safeFold = useCallback((evs: KymEvent[], opts?: { asOf?: string }): BudgetState | null => {
+    try {
+      return computeState(evs, opts);
+    } catch (e) {
+      console.warn("[kym] fold failed, retrying on well-formed events:", e);
+      try {
+        return computeState(evs.filter(isWellFormed), opts);
+      } catch (e2) {
+        console.warn("[kym] fold failed again; keeping the last good state:", e2);
+        return null;
       }
-      eventsRef.current = next;
-      setEvents(next);
     }
-    return next;
   }, []);
+  const state = useMemo(() => {
+    if (!events.length) return EMPTY_STATE;
+    const st = safeFold(events, { asOf: calMonth });
+    const bud = currentBudgetIdRef.current;
+    if (st) { lastGoodRef.current = { budgetId: bud, state: st }; return st; }
+    return lastGoodRef.current.budgetId === bud ? lastGoodRef.current.state : EMPTY_STATE;
+  }, [events, calMonth, safeFold]);
+  stateRef.current = state;
+  // The invariant is a GLOBAL identity — check it on the full fold (no asOf) when the
+  // log has anything after the viewed month: a future-month assignment lowers RTA but
+  // isn't in this month's categories, so the asOf fold would fail it spuriously.
+  // Mirrors kym_core publishBudget.
+  const invariant = useMemo(() => {
+    const full = events.length && touchesAfter(events, calMonth) ? safeFold(events) ?? state : state;
+    return checkInvariant(full);
+  }, [events, calMonth, state, safeFold]);
+  const txns = useMemo(() => {
+    try { return listTransactions(events); } catch (e) { console.warn("[kym] listTransactions failed:", e); return listTransactions(events.filter(isWellFormed)); }
+  }, [events]);
 
-  // Route an incoming event (from live receive OR store pull) by budget: the
-  // current budget folds into the live view; a background budget appends to disk.
+  // Append events (local or remote) to a budget's log. EVERY log mutation of a budget
+  // runs through withBudgetLock(budgetId) — one promise chain per budget — so a live
+  // ingest, a background append and a budget switch can't interleave read → await →
+  // overwrite. Inside the lock the budget is re-checked: if it's no longer the rendered
+  // one (the user switched), the events go to its stored log instead of the view.
+  // Memory is updated synchronously (no await between the check and the update), then
+  // only the NEW events are appended to disk. Malformed events are dropped at the door.
+  // Resolves to the current log (or null when the events went to a background budget).
+  const ingest = useCallback(
+    (incoming: KymEvent[], budgetId: string = currentBudgetIdRef.current): Promise<KymEvent[] | null> =>
+      withBudgetLock(budgetId, async () => {
+        const good = incoming.filter(isWellFormed);
+        if (budgetId !== currentBudgetIdRef.current) {
+          await appendToStoredLog(budgetId, good);   // throws (writes nothing) on a failed read
+          return null;
+        }
+        if (unreadableRef.current.has(budgetId)) {
+          // Never write over a log we couldn't read. Retry the read; if it now works,
+          // adopt it (memory was empty) and carry on; else refuse this write.
+          const disk = await readBudgetLog(budgetId);
+          if (budgetId !== currentBudgetIdRef.current) { await appendToStoredLog(budgetId, good); return null; }
+          unreadableRef.current.delete(budgetId);
+          const diskIds = new Set(disk.map((d) => d.id));
+          const merged = [...disk, ...eventsRef.current.filter((e) => !diskIds.has(e.id))];
+          eventsRef.current = merged;
+          setEvents(merged);
+          needsRewriteRef.current.add(budgetId);
+        }
+        const before = eventsRef.current;
+        const seen = new Set(before.map((e) => e.id));
+        const added: KymEvent[] = [];
+        for (const e of good) if (!seen.has(e.id)) { seen.add(e.id); added.push(e); }
+        if (added.length === 0 && !needsRewriteRef.current.has(budgetId)) return before;
+        // ADR 0013: advance the clock past NEWLY-ingested REMOTE events so a
+        // subsequent local edit sorts after them (fixes silent LWW revert). Only
+        // new + non-local ids — re-received dupes must not bump the clock.
+        const clk = clockRef.current;
+        if (clk) for (const e of added) if (e.hlc.dev !== deviceIdRef.current) clk.receive(e.hlc);
+        const next = added.length ? [...before, ...added] : before;
+        eventsRef.current = next;
+        if (added.length) setEvents(next);
+        try {
+          if (needsRewriteRef.current.has(budgetId)) {
+            await rewriteStoredLog(budgetId, next);
+            needsRewriteRef.current.delete(budgetId);
+          } else {
+            await appendStoredEvents(budgetId, added);
+          }
+        } catch (e) {
+          needsRewriteRef.current.add(budgetId);   // memory has them; next write persists all
+          throw e;
+        }
+        return next;
+      }),
+    []
+  );
+
+  // Route an incoming event (from live receive OR store pull) to its budget. Events
+  // are micro-batched per budget (50 ms) so a store pull of N events is one locked
+  // append, not N whole-chunk rewrites. ingest() decides, INSIDE the budget lock,
+  // whether it's the rendered budget (fold into the view) or a background one (disk).
   // Stable identity so it can be handed to startReceiving/storeSync once.
+  const pendingRef = useRef(new Map<string, KymEvent[]>());
   const routeIncoming = useCallback((budgetId: string, event: KymEvent) => {
-    if (budgetId === currentBudgetIdRef.current) ingest([event]).catch(() => {});
-    else appendBudgetEventsToStorage(budgetId, [event]).catch(() => {});
+    const pending = pendingRef.current;
+    const q = pending.get(budgetId);
+    if (q) { q.push(event); return; }
+    pending.set(budgetId, [event]);
+    setTimeout(() => {
+      const batch = pending.get(budgetId) ?? [];
+      pending.delete(budgetId);
+      ingest(batch, budgetId).catch((e) => console.warn("[kym] ingest failed:", e));
+    }, 50);
   }, [ingest]);
 
   const commit = useCallback(
@@ -303,11 +442,13 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
           if (e.payload && (e.payload as any).author == null) (e.payload as any).author = author;
         }
       }
-      await ingest(newEvents);
-      // Best-effort publish to the CURRENT budget's household over Delivery.
+      // The budget these events were authored FOR — captured before any await so a
+      // concurrent budget switch can't send them to (or store them in) another household.
+      const bud = currentBudgetIdRef.current;
+      await ingest(newEvents, bud);
+      // Best-effort publish to that budget's household over Delivery.
       // Fire-and-forget: capture must NEVER block on (or fail because of) the net.
       if (syncActiveRef.current) {
-        const bud = currentBudgetIdRef.current;
         for (const e of newEvents) {
           sendEnvelope(e, bud).catch(() => {
             /* offline / no peers / node not up — the event is already in the log */
@@ -322,7 +463,14 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
   // peer). The current budget's log is in memory; a background budget's is read from
   // disk. The v2 catch-up path (sendCatchup/onCatchup) supersedes this — it serves only
   // the exact delta — but we keep it so a pre-v2 peer still converges.
+  // Throttled to one whole-log re-serve per budget per 30 s (mirrors kym_core): several
+  // old peers asking at once must not each trigger a full flood.
+  const lastFullServeRef = useRef(new Map<string, number>());
   const reserveBudget = useCallback(async (budgetId: string) => {
+    const now = Date.now();
+    const last = lastFullServeRef.current.get(budgetId) ?? 0;
+    if (now - last < 30_000) return;
+    lastFullServeRef.current.set(budgetId, now);
     const log =
       budgetId === currentBudgetIdRef.current
         ? eventsRef.current
@@ -345,13 +493,25 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
   // Handle one incoming catch-up frame (fp/ids/need): step the pure reconciliation over
   // this budget's log, serve the id-exact events the peer lacks, and publish the fp/ids/need
   // replies (all single-segment). Mirrors the desktop core's ingest dispatch of respond().
+  // Round-opening fps (full range, no lo/hi) are answered at most once per (peer, budget)
+  // per 10 s, and one `need` answer serves at most MAX_NEED_SERVE events (the peer's next
+  // round asks for the rest) — both mirror kym_core so a burst can't flood the mesh.
+  const lastRoundAnswerRef = useRef(new Map<string, number>());
   const onCatchup = useCallback(async (budgetId: string, msg: any) => {
+    if (msg?.t === "fp" && msg.lo === undefined && msg.hi === undefined) {
+      const k = `${String(msg.from)}\u0000${budgetId}`;
+      const now = Date.now();
+      const last = lastRoundAnswerRef.current.get(k) ?? 0;
+      if (now - last < 10_000) return;
+      lastRoundAnswerRef.current.set(k, now);
+    }
     const log =
       budgetId === currentBudgetIdRef.current
         ? eventsRef.current
         : await loadBudgetLog(budgetId);
     const step = respond(log, msg, deviceIdRef.current);
-    for (const e of step.serve) sendEnvelope(e, budgetId).catch(() => {});
+    const serve = msg?.t === "need" ? step.serve.slice(0, MAX_NEED_SERVE) : step.serve;
+    for (const e of serve) sendEnvelope(e, budgetId).catch(() => {});
     for (const r of step.replies) sendCatchupMsg(budgetId, r).catch(() => {});
   }, []);
 
@@ -378,20 +538,40 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
     if (changed) { await saveRegistry(reg); setBudgets(reg.budgets); }
   }, []);
 
+  // Read + adopt a budget's log INSIDE its lock, so every append already queued for it
+  // lands first and every later one sees it as current (→ folds into the view). A newer
+  // switch started meanwhile wins (switchSeq). A failed read renders it empty and marks
+  // it read-only (never overwritten) instead of throwing.
+  const switchTo = useCallback(async (id: string): Promise<boolean> => {
+    const seq = ++switchSeqRef.current;
+    return withBudgetLock(id, async () => {
+      let log: KymEvent[] = [];
+      try {
+        log = await readBudgetLog(id);
+        unreadableRef.current.delete(id);
+      } catch (e) {
+        unreadableRef.current.add(id);
+        if (seq === switchSeqRef.current) reportUnreadable(e);
+      }
+      if (seq !== switchSeqRef.current) return false;   // a later switch superseded this one
+      currentBudgetIdRef.current = id;
+      setCurrentBudgetId(id);
+      eventsRef.current = log;
+      setEvents(log);
+      return true;
+    });
+  }, []);
+
   // Switch the rendered budget: persist the selection, load its log, re-fold. All
   // budgets keep syncing in the background regardless of which is current.
   const selectBudget = useCallback(
     async (id: string) => {
       if (id === currentBudgetIdRef.current) return;
-      const log = await loadBudgetLog(id);
-      currentBudgetIdRef.current = id;
-      setCurrentBudgetId(id);
-      eventsRef.current = log;
-      setEvents(log);
+      if (!(await switchTo(id))) return;
       const reg = await loadRegistry();
       await saveRegistry({ ...reg, current: id });
     },
-    []
+    [switchTo]
   );
 
   // Create a NEW budget = a new household: generate its own secret (this device
@@ -408,6 +588,7 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
     const nextReg = { current: id, budgets: [...reg.budgets, meta] };
     await saveRegistry(nextReg);
     setBudgets(nextReg.budgets);
+    switchSeqRef.current++;   // cancel any in-flight switch
     currentBudgetIdRef.current = id;
     setCurrentBudgetId(id);
     eventsRef.current = [];
@@ -457,6 +638,7 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
     const nextReg = { current: id, budgets: [...reg.budgets, meta] };
     await saveRegistry(nextReg);
     setBudgets(nextReg.budgets);
+    switchSeqRef.current++;   // cancel any in-flight switch
     currentBudgetIdRef.current = id;
     setCurrentBudgetId(id);
     eventsRef.current = [];
@@ -497,12 +679,12 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
     if (!syncActiveRef.current) return;
     // Primary: pull the full history from the fleet store (reliable, no reliance on
     // our own publish propagating). Then v2 catch-up over every household (serves/pulls
-    // the exact delta). A bare SYNC_REQ too, so a pre-v2 peer still re-serves us.
+    // the exact delta). No legacy SYNC_REQ any more: it made every peer re-serve its
+    // WHOLE log on each tap; the RBSR round moves only the missing events.
     storeSync(routeIncoming)
       .then((s) => setStoreInfo(s.detail))
       .catch(() => {});
     catchupAll().catch(() => {});
-    sendSyncReq(deviceIdRef.current).catch(() => {});
   }, [catchupAll, routeIncoming]);
 
   // Permanently delete a budget on THIS device: drop its log, forget its household
@@ -514,18 +696,14 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
     const remaining = reg.budgets.filter((b) => b.id !== id);
     const nextCurrent = reg.current === id ? remaining[0].id : reg.current;
     await saveRegistry({ current: nextCurrent, budgets: remaining });
+    setBudgets(remaining);
+    // Switch away and stop syncing its topic FIRST, then wipe: an ingest that lands
+    // between the wipe and the switch would otherwise re-create the deleted log.
+    if (currentBudgetIdRef.current === id) await switchTo(nextCurrent);
+    await refreshRoutes().catch(() => {}); // stop syncing the removed topic
     await clearBudgetLog(id);
     await deleteSecret(id);
-    setBudgets(remaining);
-    if (currentBudgetIdRef.current === id) {
-      const log = await loadBudgetLog(nextCurrent);
-      currentBudgetIdRef.current = nextCurrent;
-      setCurrentBudgetId(nextCurrent);
-      eventsRef.current = log;
-      setEvents(log);
-    }
-    refreshRoutes().catch(() => {}); // stop syncing the removed topic
-  }, []);
+  }, [switchTo]);
 
   // Sync bring-up: register the receiver and mark ourselves online once the node
   // is up. Everything is wrapped so unpaired / emulator / no-peers degrades to
@@ -559,6 +737,7 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
         setSyncStatus("connecting");
         await ensureNode(); // throws NOT_PAIRED if no budget has a household key
         if (!alive) return;
+        retryCountRef.current = 0;
         setSyncStatus("syncing");
         setSyncError(null);
         // PULL history from the fleet store — the reliable catch-up (doesn't need our
@@ -582,9 +761,12 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
         if (alive) {
           setSyncStatus(notPaired ? "not paired" : "offline");
           setSyncError(notPaired ? null : msg);
-          if (!notPaired && retryCountRef.current < 5) {
+          // Keep retrying (never give up): backoff 5 s → 60 s. Also retried at once
+          // when the app comes back to the foreground (AppState effect below).
+          if (!notPaired) {
+            const delay = retryDelayMs(retryCountRef.current);
             retryCountRef.current += 1;
-            retryTimer = setTimeout(() => { if (alive) setRetryTick((t) => t + 1); }, 15000);
+            retryTimer = setTimeout(() => { if (alive) setRetryTick((t) => t + 1); }, delay);
           }
         }
       }
@@ -596,6 +778,20 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
       if (catchupTimer) clearInterval(catchupTimer);
     };
   }, [ready, ingest, retryTick, onCatchup, catchupAll]);
+
+  // Foreground = retry now: a node that failed while backgrounded (no network, the
+  // Loam service not up yet) shouldn't wait out the backoff once the user is back.
+  const syncStatusRef = useRef<SyncStatus>("offline");
+  useEffect(() => { syncStatusRef.current = syncStatus; }, [syncStatus]);
+  useEffect(() => {
+    if (!ready) return;
+    const sub = AppState.addEventListener("change", (st) => {
+      if (st !== "active" || syncStatusRef.current !== "offline" || !deliveryAvailable()) return;
+      retryCountRef.current = 0;
+      setRetryTick((t) => t + 1);
+    });
+    return () => sub.remove();
+  }, [ready]);
 
   const clock = () => {
     if (!clockRef.current) throw new Error("clock not ready");
@@ -613,11 +809,11 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
         txnId: newTxnId(),
         accountId: input.accountId,
         amount,
-        // date MUST be an ISO STRING — kym_core splits payloads e.s(strings)/e.n(numbers)
-        // and the fold reads e.s.at("date") + derives the category month via monthOf(date)
-        // = date.substr(0,7). A numeric Date.now() lands in e.n → no date AND no category
-        // activity. See memory kym-event-payload-field-types.
-        date: new Date(input.date ?? Date.now()).toISOString(),
+        // date is the LOCAL calendar day as a "YYYY-MM-DD" STRING. A string because the
+        // desktop fold derives the category month from date.substr(0,7); LOCAL because a
+        // UTC toISOString() put a 00:00–01:59 (CET/CEST) spend on the 1st into the
+        // PREVIOUS month. The stored string then buckets identically on every device.
+        date: localYmd(input.date ?? Date.now()),
         categoryId: input.categoryId ?? null,
         cleared: input.cleared ?? "uncleared",
         approved: true,
@@ -632,11 +828,17 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
   // budgeting hands out). Same txn shape as an expense, opposite sign + RTA target.
   const addIncome = useCallback(
     async (amountMilli: number, accountId: string, opts?: { memo?: string; date?: number }) => {
+      // Invariant: income only counts toward Ready to Assign in an on-budget ASSET
+      // account (checking/savings/cash) — booked anywhere else the fold ignores it.
+      const acct = stateRef.current.accounts.find((a) => a.id === accountId);
+      if (!acct || !acct.onBudget || !ASSET_TYPES.has(acct.type)) {
+        throw new Error("Income must go to an on-budget checking, savings or cash account.");
+      }
       const event = ev.txnCreate(clock().send(), {
         txnId: newTxnId(),
         accountId,
         amount: Math.abs(amountMilli), // inflow is positive, always
-        date: new Date(opts?.date ?? Date.now()).toISOString(), // ISO string — see addExpense
+        date: localYmd(opts?.date ?? Date.now()), // local YYYY-MM-DD string — see addExpense
         categoryId: RTA_INFLOW,
         cleared: "uncleared",
         approved: true,
@@ -723,6 +925,13 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
     ) => {
       // Foreign accounts must be off-budget tracking — one budget currency, no
       // in-budget FX (mirrors the CLI rule in cli/kym.mjs).
+      // Refuse a duplicate name: the old slug id made "Checking" twice silently REPLACE
+      // the first account (same id → LWW). New ids are collision-free (newEntityId).
+      const clean = name.trim();
+      if (!clean) throw new Error("Account name required.");
+      if (stateRef.current.accounts.some((a) => a.name.trim().toLowerCase() === clean.toLowerCase())) {
+        throw new Error(`An account named "${clean}" already exists.`);
+      }
       const onBudget = accountType !== AccountType.TRACKING;
       const ccy = (currency || budgetCurrency).toUpperCase();
       if (onBudget && ccy !== budgetCurrency) {
@@ -731,12 +940,12 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
         );
       }
       const event = ev.accountCreate(clock().send(), {
-        accountId: acctId(name),   // slug-derived so it dedups with desktop on merge
-        name,
+        accountId: newEntityId("acct:", clean, takenIds(eventsRef.current)),
+        name: clean,
         accountType,
         onBudget,
         startingBalance: startingBalanceMilli,
-        startDate: new Date().toISOString().slice(0, 10), // YYYY-MM-DD STRING (desktop writes e.s["startDate"]=ymd())
+        startDate: localYmd(), // local YYYY-MM-DD STRING (desktop writes e.s["startDate"]=ymd())
         currency: ccy,
       });
       await commit([event]);
@@ -751,6 +960,14 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
   // required a pre-seeded group, which is what blocked "add category").
   const addCategory = useCallback(
     async (name: string, group: string) => {
+      // Refuse a duplicate name (a second "Groceries" used to replace the first via
+      // the same slug id); new ids are collision-free (newEntityId).
+      const clean = name.trim();
+      if (!clean) throw new Error("Category name required.");
+      if (stateRef.current.categories.some((c) => c.name.trim().toLowerCase() === clean.toLowerCase())) {
+        throw new Error(`A category named "${clean}" already exists.`);
+      }
+      const taken = takenIds(eventsRef.current);
       const g = String(group || "").trim();
       const existing = stateRef.current.groups.find(
         (x) => x.id === g || x.name.toLowerCase() === g.toLowerCase()
@@ -761,17 +978,20 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
         gid = existing.id;
       } else {
         const gname = g && !g.startsWith("grp:") && !g.startsWith("grp-") ? g : "General";
-        gid = grpId(gname);
+        gid = newEntityId("grp:", gname, taken);
+        taken.add(gid);
         events.push(ev.groupCreate(clock().send(), { groupId: gid, name: gname }));
       }
-      events.push(ev.categoryCreate(clock().send(), { categoryId: catId(name), groupId: gid, name }));
+      events.push(ev.categoryCreate(clock().send(), { categoryId: newEntityId("cat:", clean, taken), groupId: gid, name: clean }));
       await commit(events);
     },
     [commit]
   );
 
   // --- budgeting ops (parity with CLI/desktop; same engine event builders) ---
-  const monthNow = () => state.currentMonth || new Date().toISOString().slice(0, 7);
+  // The live calendar month (local), matching desktop's currentMonth() — NOT the latest
+  // month with data (a fresh month would otherwise keep assigning into last month).
+  const monthNow = () => calMonth;
 
   // Give a category money for a month. mode "delta" adds `amount`; "set" makes the
   // assigned total equal `amount`. Mirrors `kym assign` (cli/kym.mjs).
@@ -780,7 +1000,7 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
       const event = ev.assign(clock().send(), { categoryId, month: month || monthNow(), amount: amountMilli, mode });
       await commit([event]);
     },
-    [commit, state.currentMonth]
+    [commit, calMonth]
   );
 
   // Net-zero move of budgeted money between two categories in a month (`kym move`).
@@ -789,7 +1009,7 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
       const event = ev.move(clock().send(), { fromCategoryId, toCategoryId, month: month || monthNow(), amount: amountMilli });
       await commit([event]);
     },
-    [commit, state.currentMonth]
+    [commit, calMonth]
   );
 
   // Set (or clear, amount=0) a funding target. type "monthly" funds `amount` each
@@ -814,7 +1034,7 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
       if (diff !== 0) {
         out.push(
           ev.txnCreate(c.send(), {
-            txnId: newTxnId(), accountId, amount: diff, date: Date.now(),
+            txnId: newTxnId(), accountId, amount: diff, date: localYmd(), // local YYYY-MM-DD string (was a numeric Date.now())
             categoryId: null, payeeId: "Reconciliation adjustment", cleared: "reconciled", approved: true,
           })
         );
@@ -870,10 +1090,19 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
   }, [commit]);
 
   const resetAll = useCallback(async () => {
-    // Reset only the CURRENT budget's log (other budgets are untouched).
-    await clearBudgetLog(currentBudgetIdRef.current);
-    eventsRef.current = [];
-    setEvents([]);
+    // Reset only the CURRENT budget's log (other budgets are untouched). Queued in the
+    // budget's lock so an in-flight append can't re-write the log after the wipe. Also
+    // the escape hatch for a budget whose stored log is unreadable.
+    const bud = currentBudgetIdRef.current;
+    await withBudgetLock(bud, async () => {
+      await clearStoredLog(bud);
+      unreadableRef.current.delete(bud);
+      needsRewriteRef.current.delete(bud);
+      if (currentBudgetIdRef.current === bud) {
+        eventsRef.current = [];
+        setEvents([]);
+      }
+    });
     // Fresh clock so HLCs restart cleanly for the new (empty) log.
     clockRef.current = new Clock(deviceId);
   }, [deviceId]);
