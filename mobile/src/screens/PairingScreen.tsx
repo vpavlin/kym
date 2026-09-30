@@ -51,7 +51,7 @@ function extractCode(input: string): string {
 export function PairingScreen() {
   // Pairing operates on the CURRENT budget (each budget is its own household with
   // its own secret). Switching budgets on another tab re-derives this screen.
-  const { currentBudgetId, currentBudgetName, currentBudgetColor, refreshBudgetColors } = useBudget();
+  const { currentBudgetId, currentBudgetName, currentBudgetColor, refreshBudgetColors, joinBudget } = useBudget();
   const styles = useMemo(() => makeStyles(currentBudgetColor), [currentBudgetColor]);
   const [loading, setLoading] = useState(true);
   const [secretB32, setSecretB32] = useState<string>("");
@@ -79,7 +79,22 @@ export function PairingScreen() {
     };
   }, [currentBudgetId]);
 
-  const regenerate = async () => {
+  // Both "generate a new secret" and "join (replace key)" swap THIS budget's household
+  // key — so they are confirmed first: the budget stops syncing with every device it is
+  // paired with now, and its whole log is then shared into the new household.
+  const regenerate = () => {
+    Alert.alert(
+      "Generate a new secret?",
+      `"${currentBudgetName}" will stop syncing with every device paired with it now. ` +
+        "They keep their copy but won't see new changes until they pair again with the new code. " +
+        "This can't be undone.",
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: "Generate new secret", style: "destructive", onPress: () => { doRegenerate().catch((e) => Alert.alert("Couldn't regenerate", String(e?.message ?? e))); } },
+      ]
+    );
+  };
+  const doRegenerate = async () => {
     const s = newSecret();
     await saveSecret(currentBudgetId, s);
     resetIdentityCache(currentBudgetId);
@@ -118,6 +133,34 @@ export function PairingScreen() {
       return Alert.alert("Invalid code", "Scan or paste the full pairing code (or the kym://pair link) shown on the other device.");
     }
     const b32 = encodeSecret(secret);                 // normalize to canonical form
+    if (b32 === secretB32) return Alert.alert("Already joined", "This budget already uses that household code.");
+    // Recommended: join as a NEW budget (this one is untouched). Replacing this budget's
+    // key instead unpairs it from its current devices AND merges its whole history into
+    // the joined household — confirmed explicitly.
+    Alert.alert(
+      "Join household",
+      `Add the scanned household as a new budget (recommended), or replace "${currentBudgetName}"'s key with it?\n\n` +
+        `Replacing unpairs "${currentBudgetName}" from the devices it syncs with now and shares ALL of its entries into the joined household.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Replace this budget's key",
+          style: "destructive",
+          onPress: () => { replaceKey(secret, b32).catch((e) => Alert.alert("Couldn't join", String(e?.message ?? e))); },
+        },
+        {
+          text: "Add as new budget",
+          onPress: () => {
+            joinBudget("Shared budget", b32)
+              .then(() => { setJoinCode(""); Alert.alert("Joined household", "Added as a new budget. Confirm the fingerprint on the Pair tab matches the other device."); })
+              .catch((e) => Alert.alert("Couldn't join", String(e?.message ?? e)));
+          },
+        },
+      ]
+    );
+  };
+
+  const replaceKey = async (secret: Uint8Array, b32: string) => {
     await saveSecret(currentBudgetId, secret);        // this budget now shares that household key
     resetIdentityCache(currentBudgetId);              // delivery re-derives the topic on next sync
     await refreshRoutes();                            // subscribe the joined topic on the live node
