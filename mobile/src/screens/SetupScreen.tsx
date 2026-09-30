@@ -55,8 +55,10 @@ export function SetupScreen() {
 
   const [catName, setCatName] = useState("");
   const [catGroup, setCatGroup] = useState<string>("Everyday");  // group NAME, not id
-  const [sharedNode, setSharedNode] = useState(false);
-  useEffect(() => { SecureStore.getItemAsync("kym-shared-node").then((v) => setSharedNode(v === "1")).catch(() => {}); }, []);
+  // Shared (Loam) node is DEFAULT-ON: only an explicit "0" opts out. Must match
+  // delivery.ts ensureNode's reading of the same key.
+  const [sharedNode, setSharedNode] = useState(true);
+  useEffect(() => { SecureStore.getItemAsync("kym-shared-node").then((v) => setSharedNode(v !== "0")).catch(() => {}); }, []);
   const setSharedNodePref = (v: boolean) => { setSharedNode(v); SecureStore.setItemAsync("kym-shared-node", v ? "1" : "0").catch(() => {}); };
 
   const groups = state.groups;

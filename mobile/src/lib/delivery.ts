@@ -99,9 +99,10 @@ export async function ensureNode(onStatus?: (s: string) => void): Promise<string
   routes = await buildRoutes();
   if (routes.length === 0) throw new Error(NOT_PAIRED);
   const deviceId = await getDeviceId();
-  // Route through the device-wide Logos Delivery node when enabled (else embed own node).
-  // Must be set BEFORE the first transport call.
-  try { const shared = (await SecureStore.getItemAsync("kym-shared-node")) === "1"; (transport as any).preferServiceBackend?.(shared, "kym"); } catch { /* */ }
+  // Route through the device-wide Logos Delivery (Loam) node — DEFAULT-ON; only an explicit
+  // "0" (Setup toggle off) embeds our own node. Must be set BEFORE the first transport call.
+  // (The transport falls back to its own node when no Loam service is installed.)
+  try { const shared = (await SecureStore.getItemAsync("kym-shared-node")) !== "0"; (transport as any).preferServiceBackend?.(shared, "kym"); } catch { /* */ }
   await transport.start({
     deviceId,
     topics: routes.map((r) => r.topic),
