@@ -130,9 +130,29 @@ Item {
     Timer { id: toastTimer; interval: 3400; onTriggered: root.toastText = "" }
     function showToast(t, err) { root.toastText = t; root.toastError = err; toastTimer.restart(); }
 
-    function callCore(method, args) {
-        if (typeof logos === "undefined" || !logos.callModule) return "Logos bridge unavailable";
-        return String(logos.callModule("kym_core", method, args || []));
+    // RULE (vpavlin): no blocking cross-module calls in a view. callAsync uses
+    // logos.callModuleAsync when the host has it, else the old blocking callModule DEFERRED to the
+    // next event-loop turn (never inside the caller's handler). cb gets the raw result string.
+    readonly property int callTimeoutMs: 20000
+    function callAsync(method, args, cb) {
+        var a = args || [];
+        var deliver = function (raw) {
+            if (!cb) return;
+            try { cb(raw === undefined || raw === null ? "" : String(raw)); }
+            catch (e) { console.warn("kym view: callback error: " + e); }
+        };
+        if (typeof logos === "undefined" || logos === null) { Qt.callLater(function () { deliver("Logos bridge unavailable"); }); return; }
+        if (typeof logos.callModuleAsync === "function") {
+            try { logos.callModuleAsync("kym_core", method, a, deliver, root.callTimeoutMs); }
+            catch (e) { Qt.callLater(function () { deliver("callModuleAsync threw: " + e); }); }
+            return;
+        }
+        Qt.callLater(function () {
+            var raw;
+            try { raw = (typeof logos.callModule === "function") ? logos.callModule("kym_core", method, a) : "Logos bridge unavailable"; }
+            catch (e) { raw = "callModule threw: " + e; }
+            deliver(raw);
+        });
     }
     // Normalize the bridge return into a budget-JSON string, or null. The bridge
     // may hand back raw JSON or a quoted/escaped JSON string — accept both.
@@ -151,16 +171,18 @@ Item {
     property var qrData: null
     function buildQr() {
         if (!(budget.pairingCode || "")) { root.qrData = null; return; }
-        try {
-            var res = callCore("pairingQr", []);
-            for (var k = 0; k < 2 && typeof res === "string"; k++) res = JSON.parse(res);
-            if (res && res.ok && res.n && res.cells && res.cells.length >= res.n * res.n) {
-                root.qrData = { n: res.n, cells: res.cells };
-                try { qrCanvas.requestPaint(); } catch (e2) {}
-                return;
-            }
-        } catch (e) { }
-        root.qrData = null;
+        callAsync("pairingQr", [], function (raw) {
+            try {
+                var res = raw;
+                for (var k = 0; k < 2 && typeof res === "string"; k++) res = JSON.parse(res);
+                if (res && res.ok && res.n && res.cells && res.cells.length >= res.n * res.n) {
+                    root.qrData = { n: res.n, cells: res.cells };
+                    try { qrCanvas.requestPaint(); } catch (e2) {}
+                    return;
+                }
+            } catch (e) { }
+            root.qrData = null;
+        });
     }
 
     // Number of events in a budget-JSON string (0 on parse failure). The event log
@@ -183,8 +205,14 @@ Item {
     }
     function _pushBudget(b) { if (!b) return; root._pendingBudget = b; Qt.callLater(root._applyPendingBudget); }
 
+    property bool refreshBusy: false
     function refresh() {
-        var b = asBudget(callCore("snapshot", []));
+        if (root.refreshBusy) return;           // one snapshot in flight at a time (polls can't pile up)
+        root.refreshBusy = true;
+        callAsync("snapshot", [], function (raw) { root.refreshBusy = false; root.applySnapshot(raw); });
+    }
+    function applySnapshot(raw) {
+        var b = asBudget(raw);
         if (!b) return;
         // Multi-instance guard: Basecamp round-robins callModule across several
         // kym_core instances; one that hasn't loaded the shared log yet returns a
@@ -197,7 +225,8 @@ Item {
     }
     // Inspect a mutation result. On success kym_core returns the FRESH budget JSON
     // (not ""), so we render straight from the instance that applied the edit.
-    function run(result, okMsg) {
+    function run(method, args, okMsg) { callAsync(method, args, function (r) { root.applyResult(r, okMsg); }); }
+    function applyResult(result, okMsg) {
         var b = asBudget(result);
         if (b) { root._pushBudget(b); root.action = ""; showToast(okMsg || "Saved", false); return; }
         var r = (result === undefined || result === null) ? "" : String(result).trim();
@@ -229,9 +258,11 @@ Item {
         return y + "-" + (m + 1 < 10 ? "0" : "") + (m + 1);
     }
     function gotoMonth(ym) {
-        var b = asBudget(callCore("setViewMonth", [ym]));
-        if (b) { root._pushBudget(b); return; }
-        showToast("Update kym_core to 0.5.0 for month navigation", true);
+        callAsync("setViewMonth", [ym], function (raw) {
+            var b = asBudget(raw);
+            if (b) { root._pushBudget(b); return; }
+            showToast("Update kym_core to 0.5.0 for month navigation", true);
+        });
     }
 
     // ---- grid filter + collapsible groups ----
@@ -388,7 +419,7 @@ Item {
                                                 Text { textFormat: Text.PlainText; visible: modelData.current === true; text: "✓"; color: accent; font.pixelSize: 13 }
                                             }
                                             MouseArea { id: bItemMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
-                                                onClicked: { budgetPop.close(); if (modelData.current !== true) run(callCore("selectBudget", [modelData.id]), "Switched to " + modelData.name); } }
+                                                onClicked: { budgetPop.close(); if (modelData.current !== true) run("selectBudget", [modelData.id], "Switched to " + modelData.name); } }
                                             // Delete — on hover, with a strong confirm. Declared AFTER bItemMa so
                                             // its MouseArea sits on top in the corner. Hidden for the only budget.
                                             Rectangle {
@@ -412,7 +443,7 @@ Item {
                                                             Item { Layout.fillWidth: true }
                                                             Btn { label: "Cancel"; onClicked: bDelConfirm.close() }
                                                             Btn { label: "Delete"; primary: true
-                                                                  onClicked: { bDelConfirm.close(); budgetPop.close(); run(callCore("deleteBudget", [modelData.id]), "Budget deleted"); } }
+                                                                  onClicked: { bDelConfirm.close(); budgetPop.close(); run("deleteBudget", [modelData.id], "Budget deleted"); } }
                                                         }
                                                     }
                                                 }
@@ -437,8 +468,8 @@ Item {
                         visible: root.addingBudget
                         spacing: 6
                         Field { id: newBudgetField; placeholderText: "new budget name"; implicitWidth: 200
-                                onAccepted: { if (text.trim() !== "") { run(callCore("createBudget", [text.trim()]), "Budget created — share its code only with people you want in it"); text = ""; root.addingBudget = false; } } }
-                        Btn { label: "Create"; primary: true; onClicked: { if (newBudgetField.text.trim() !== "") { run(callCore("createBudget", [newBudgetField.text.trim()]), "Budget created"); newBudgetField.text = ""; root.addingBudget = false; } } }
+                                onAccepted: { if (text.trim() !== "") { run("createBudget", [text.trim()], "Budget created — share its code only with people you want in it"); text = ""; root.addingBudget = false; } } }
+                        Btn { label: "Create"; primary: true; onClicked: { if (newBudgetField.text.trim() !== "") { run("createBudget", [newBudgetField.text.trim()], "Budget created"); newBudgetField.text = ""; root.addingBudget = false; } } }
                         Btn { label: "✕"; onClicked: { root.addingBudget = false; newBudgetField.text = ""; } }
                     }
                     // Month stepper: ‹ 2026-07 ›  + a "Today" jump when off the live month.
@@ -572,9 +603,9 @@ Item {
                                 Field {
                                     id: authorField; implicitWidth: 220; placeholderText: "e.g. Vašek"
                                     text: root.authorName
-                                    onAccepted: run(callCore("setAuthorName", [text.trim()]), "Name saved")
+                                    onAccepted: run("setAuthorName", [text.trim()], "Name saved")
                                 }
-                                Btn { label: "Save"; onClicked: run(callCore("setAuthorName", [authorField.text.trim()]), "Name saved") }
+                                Btn { label: "Save"; onClicked: run("setAuthorName", [authorField.text.trim()], "Name saved") }
                             }
                         }
                     }
@@ -595,9 +626,9 @@ Item {
                                 Field {
                                     id: deviceField; implicitWidth: 220; placeholderText: "e.g. vasek-laptop"
                                     text: root.deviceName
-                                    onAccepted: run(callCore("setDeviceId", [text.trim()]), "Device name saved — restart to update the sync sender")
+                                    onAccepted: run("setDeviceId", [text.trim()], "Device name saved — restart to update the sync sender")
                                 }
-                                Btn { label: "Save"; onClicked: run(callCore("setDeviceId", [deviceField.text.trim()]), "Device name saved — restart to update the sync sender") }
+                                Btn { label: "Save"; onClicked: run("setDeviceId", [deviceField.text.trim()], "Device name saved — restart to update the sync sender") }
                             }
                         }
                     }
@@ -612,7 +643,7 @@ Item {
                             Text { textFormat: Text.PlainText; text: "Starter budget"; color: fg; font.pixelSize: 14; font.bold: true }
                             Text { textFormat: Text.PlainText; text: "Seed accounts, groups, categories and this month's assignments so the budget is meaningful immediately. Only works on an empty budget."
                                    color: dim; font.pixelSize: 11; Layout.fillWidth: true; wrapMode: Text.WordWrap }
-                            Btn { label: "Seed starter budget"; primary: true; onClicked: run(callCore("loadDemo", []), "Starter budget added") }
+                            Btn { label: "Seed starter budget"; primary: true; onClicked: run("loadDemo", [], "Starter budget added") }
                         }
                     }
 
@@ -675,7 +706,7 @@ Item {
                                     Field { id: joinNameField; placeholderText: "name for the joined budget"; implicitWidth: 160 }
                                     Field { id: pairField; placeholderText: "paste another device's code / kym://pair link"; implicitWidth: 320 }
                                 }
-                                Btn { label: "Join a shared budget"; onClicked: run(callCore("joinBudget", [joinNameField.text.trim(), pairField.text.trim()]), "Joined as a new budget — confirm the fingerprint matches the other device") }
+                                Btn { label: "Join a shared budget"; onClicked: run("joinBudget", [joinNameField.text.trim(), pairField.text.trim()], "Joined as a new budget — confirm the fingerprint matches the other device") }
                             }
                         }
                     }
@@ -690,7 +721,7 @@ Item {
                             Text { textFormat: Text.PlainText; text: "Sync"; color: fg; font.pixelSize: 14; font.bold: true }
                             RowLayout {
                                 spacing: 10
-                                Btn { label: "Sync now"; onClicked: run(callCore("resync", []), "Asked peers + re-served our log") }
+                                Btn { label: "Sync now"; onClicked: run("resync", [], "Asked peers + re-served our log") }
                                 Rectangle {
                                     implicitWidth: 8; implicitHeight: 8; radius: 4; color: root.syncColor
                                     opacity: root.syncBusy ? busyOpacity2 : 1.0
@@ -872,37 +903,37 @@ Item {
                     // Enter in the amount field submits the form (onAccepted) — same
                     // call as the button, so typing amount + Return is enough.
                     RowLayout { visible: action === "expense"; spacing: 8
-                        Field { id: exAmt; placeholderText: "amount"; onAccepted: run(callCore("spend", [exAmt.text, exAcct.value, exCat.value])) }
+                        Field { id: exAmt; placeholderText: "amount"; onAccepted: run("spend", [exAmt.text, exAcct.value, exCat.value]) }
                         Drop { id: exAcct; placeholderText: "account"; model: root.accountNames }
                         Drop { id: exCat; placeholderText: "category"; model: root.categoryNames }
-                        Btn { label: "Add expense"; onClicked: run(callCore("spend", [exAmt.text, exAcct.value, exCat.value])) }
+                        Btn { label: "Add expense"; onClicked: run("spend", [exAmt.text, exAcct.value, exCat.value]) }
                     }
                     RowLayout { visible: action === "income"; spacing: 8
-                        Field { id: inAmt; placeholderText: "amount"; onAccepted: run(callCore("income", [inAmt.text, inAcct.value])) }
+                        Field { id: inAmt; placeholderText: "amount"; onAccepted: run("income", [inAmt.text, inAcct.value]) }
                         Drop { id: inAcct; placeholderText: "account"; model: root.incomeAccountNames }  // asset accounts only
-                        Btn { label: "Add income"; onClicked: run(callCore("income", [inAmt.text, inAcct.value])) }
+                        Btn { label: "Add income"; onClicked: run("income", [inAmt.text, inAcct.value]) }
                     }
                     RowLayout { visible: action === "assign"; spacing: 8
                         Drop { id: asgCat; placeholderText: "category"; model: root.categoryNames }
-                        Field { id: asgAmt; placeholderText: "+ amount"; onAccepted: run(callCore("assign", [asgCat.value, root.month, asgAmt.text])) }
-                        Btn { label: "Assign"; onClicked: run(callCore("assign", [asgCat.value, root.month, asgAmt.text])) }
+                        Field { id: asgAmt; placeholderText: "+ amount"; onAccepted: run("assign", [asgCat.value, root.month, asgAmt.text]) }
+                        Btn { label: "Assign"; onClicked: run("assign", [asgCat.value, root.month, asgAmt.text]) }
                     }
                     RowLayout { visible: action === "move"; spacing: 8
                         Drop { id: mvFrom; placeholderText: "from category"; model: root.categoryNames }
                         Drop { id: mvTo; placeholderText: "to category"; model: root.categoryNames }
-                        Field { id: mvAmt; placeholderText: "amount"; onAccepted: run(callCore("moveMoney", [mvFrom.value, mvTo.value, root.month, mvAmt.text])) }
-                        Btn { label: "Move"; onClicked: run(callCore("moveMoney", [mvFrom.value, mvTo.value, root.month, mvAmt.text])) }
+                        Field { id: mvAmt; placeholderText: "amount"; onAccepted: run("moveMoney", [mvFrom.value, mvTo.value, root.month, mvAmt.text]) }
+                        Btn { label: "Move"; onClicked: run("moveMoney", [mvFrom.value, mvTo.value, root.month, mvAmt.text]) }
                     }
                     RowLayout { visible: action === "target"; spacing: 8
                         Drop { id: tgCat; placeholderText: "category"; model: root.categoryNames }
                         Drop { id: tgType; placeholderText: "type"; model: root.targetTypes; implicitWidth: 120 }
-                        Field { id: tgAmt; placeholderText: "amount"; onAccepted: run(callCore("setTarget", [tgCat.value, tgType.value || "monthly", tgAmt.text, ""])) }
-                        Btn { label: "Set target"; onClicked: run(callCore("setTarget", [tgCat.value, tgType.value || "monthly", tgAmt.text, ""])) }
+                        Field { id: tgAmt; placeholderText: "amount"; onAccepted: run("setTarget", [tgCat.value, tgType.value || "monthly", tgAmt.text, ""]) }
+                        Btn { label: "Set target"; onClicked: run("setTarget", [tgCat.value, tgType.value || "monthly", tgAmt.text, ""]) }
                     }
                     RowLayout { visible: action === "reconcile"; spacing: 8
                         Drop { id: rcAcct; placeholderText: "account"; model: root.accountNames }
-                        Field { id: rcActual; placeholderText: "bank balance"; onAccepted: run(callCore("reconcile", [rcAcct.value, rcActual.text])) }
-                        Btn { label: "Reconcile"; onClicked: run(callCore("reconcile", [rcAcct.value, rcActual.text])) }
+                        Field { id: rcActual; placeholderText: "bank balance"; onAccepted: run("reconcile", [rcAcct.value, rcActual.text]) }
+                        Btn { label: "Reconcile"; onClicked: run("reconcile", [rcAcct.value, rcActual.text]) }
                     }
                     Item { Layout.fillWidth: true }
                     Btn { label: "✕"; onClicked: action = "" }
@@ -931,7 +962,7 @@ Item {
                 Text { textFormat: Text.PlainText; text: "Start with a ready-made budget, or build your own from the list."; color: dim; font.pixelSize: 13; Layout.alignment: Qt.AlignHCenter }
                 Item { implicitHeight: 6 }
                 Btn { label: "Seed a starter budget"; primary: true; Layout.alignment: Qt.AlignHCenter
-                      onClicked: run(callCore("loadDemo", []), "Starter budget added") }
+                      onClicked: run("loadDemo", [], "Starter budget added") }
                 Btn { label: "＋ Add a group"; Layout.alignment: Qt.AlignHCenter; onClicked: { root.addingGroup = true; groupNameField.forceActiveFocus(); } }
                 Item { Layout.fillHeight: true }
             }
@@ -977,7 +1008,7 @@ Item {
                                     color: delGrpMa.containsMouse ? warn : "transparent"; border.color: line; border.width: 1
                                     Text { textFormat: Text.PlainText; anchors.centerIn: parent; text: "🗑"; font.pixelSize: 11; color: delGrpMa.containsMouse ? bg : dim }
                                     MouseArea { id: delGrpMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
-                                        onClicked: run(callCore("deleteGroup", [grp.groupName]), "Group deleted") }
+                                        onClicked: run("deleteGroup", [grp.groupName], "Group deleted") }
                                     ToolTip.visible: delGrpMa.containsMouse; ToolTip.text: "Delete group (must be empty)"
                                 }
                                 Rectangle {
@@ -997,9 +1028,9 @@ Item {
                                 Layout.fillWidth: true; Layout.leftMargin: 10; spacing: 8
                                 Field {
                                     id: catNameField; placeholderText: "new category in " + grp.groupName; implicitWidth: 240
-                                    onAccepted: { if (text.trim() !== "") { run(callCore("addCategory", [text.trim(), grp.groupName]), "Category added"); text = ""; grp.addingCat = false; } }
+                                    onAccepted: { if (text.trim() !== "") { run("addCategory", [text.trim(), grp.groupName], "Category added"); text = ""; grp.addingCat = false; } }
                                 }
-                                Btn { label: "Add"; onClicked: { if (catNameField.text.trim() !== "") { run(callCore("addCategory", [catNameField.text.trim(), grp.groupName]), "Category added"); catNameField.text = ""; grp.addingCat = false; } } }
+                                Btn { label: "Add"; onClicked: { if (catNameField.text.trim() !== "") { run("addCategory", [catNameField.text.trim(), grp.groupName], "Category added"); catNameField.text = ""; grp.addingCat = false; } } }
                                 Btn { label: "✕"; onClicked: { grp.addingCat = false; catNameField.text = ""; } }
                             }
 
@@ -1042,8 +1073,8 @@ Item {
                                                         Btn { label: "Cancel"; onClicked: delConfirm.close() }
                                                         Btn { label: modelData.canDelete === false ? "Archive" : "Delete"; primary: true
                                                               onClicked: { delConfirm.close();
-                                                                  if (modelData.canDelete === false) run(callCore("archiveCategory", [modelData.name]), "Category archived");
-                                                                  else run(callCore("deleteCategory", [modelData.name]), "Category deleted"); } }
+                                                                  if (modelData.canDelete === false) run("archiveCategory", [modelData.name], "Category archived");
+                                                                  else run("deleteCategory", [modelData.name], "Category deleted"); } }
                                                     }
                                                 }
                                             }
@@ -1077,7 +1108,7 @@ Item {
                                                     var v = parseFloat(text);
                                                     if (!isNaN(v)) {
                                                         var delta = v - Math.round(modelData.assignedRaw / 1000);
-                                                        if (delta !== 0) run(callCore("assign", [modelData.name, root.month, delta.toString()]), "Assigned to " + modelData.name);
+                                                        if (delta !== 0) run("assign", [modelData.name, root.month, delta.toString()], "Assigned to " + modelData.name);
                                                     }
                                                 }
                                                 Keys.onEscapePressed: asgCell.editing = false
@@ -1117,9 +1148,9 @@ Item {
                         Layout.fillWidth: true; Layout.topMargin: 10; spacing: 8
                         Field {
                             id: groupNameField; placeholderText: "new group name"; implicitWidth: 240
-                            onAccepted: { if (text.trim() !== "") { run(callCore("addGroup", [text.trim()]), "Group added"); text = ""; root.addingGroup = false; } }
+                            onAccepted: { if (text.trim() !== "") { run("addGroup", [text.trim()], "Group added"); text = ""; root.addingGroup = false; } }
                         }
-                        Btn { label: "Add"; onClicked: { if (groupNameField.text.trim() !== "") { run(callCore("addGroup", [groupNameField.text.trim()]), "Group added"); groupNameField.text = ""; root.addingGroup = false; } } }
+                        Btn { label: "Add"; onClicked: { if (groupNameField.text.trim() !== "") { run("addGroup", [groupNameField.text.trim()], "Group added"); groupNameField.text = ""; root.addingGroup = false; } } }
                         Btn { label: "✕"; onClicked: { root.addingGroup = false; groupNameField.text = ""; } }
                     }
 
@@ -1150,7 +1181,7 @@ Item {
                                     color: unarcMa.containsMouse ? accent : "transparent"; border.color: accent; border.width: 1
                                     Text { textFormat: Text.PlainText; id: unarcT; anchors.centerIn: parent; text: "Un-archive"; font.pixelSize: 10; color: unarcMa.containsMouse ? bg : accent }
                                     MouseArea { id: unarcMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
-                                        onClicked: run(callCore("unarchiveCategory", [modelData.name]), "Category restored") }
+                                        onClicked: run("unarchiveCategory", [modelData.name], "Category restored") }
                                 }
                             }
                         }
@@ -1198,7 +1229,7 @@ Item {
                         Field { id: acName; placeholderText: "account name"; implicitWidth: 160 }
                         Drop { id: acType; model: root.accountTypes; placeholderText: "type"; implicitWidth: 130 }
                         Field { id: acBal; placeholderText: "starting balance" }
-                        Btn { label: "Add"; onClicked: { if (acName.text.trim() !== "") { run(callCore("addAccount", [acName.text.trim(), acType.value || "checking", acBal.text]), "Account added"); acName.text = ""; acBal.text = ""; root.addingAccount = false; } } }
+                        Btn { label: "Add"; onClicked: { if (acName.text.trim() !== "") { run("addAccount", [acName.text.trim(), acType.value || "checking", acBal.text], "Account added"); acName.text = ""; acBal.text = ""; root.addingAccount = false; } } }
                         Btn { label: "✕"; onClicked: { root.addingAccount = false; acName.text = ""; acBal.text = ""; } }
                     }
                     Repeater {
@@ -1328,7 +1359,7 @@ Item {
                           onClicked: {
                               if (!editTxnPop.confirmDel) { editTxnPop.confirmDel = true; return; }
                               var id = editTxnPop.d.id; editTxnPop.close();
-                              run(callCore("deleteTxn", [id]), "Transaction deleted");
+                              run("deleteTxn", [id], "Transaction deleted");
                           } }
                     Item { Layout.fillWidth: true }
                     Btn { label: "Cancel"; onClicked: editTxnPop.close() }
@@ -1340,7 +1371,7 @@ Item {
                               if (eAcct.value !== "") p.account = eAcct.value;
                               if (eDate.text.trim() !== "") p.date = eDate.text.trim();
                               var id = editTxnPop.d.id; editTxnPop.close();
-                              run(callCore("editTxn", [id, JSON.stringify(p)]), "Transaction updated");
+                              run("editTxn", [id, JSON.stringify(p)], "Transaction updated");
                           } }
                 }
             }

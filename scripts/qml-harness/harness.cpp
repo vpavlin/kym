@@ -57,6 +57,13 @@ public:
     Q_INVOKABLE QObject *module(const QString &) { return m_backend; }
     Q_INVOKABLE bool isViewModuleReady(const QString &) { return true; }
     Q_INVOKABLE void watch(QJSValue, QJSValue, QJSValue) {}
+    // The current bridge: async module calls, result on a later event-loop turn (like the host).
+    // "snapshot" answers with the fixture budget; mutations succeed with "".
+    Q_INVOKABLE void callModuleAsync(const QString &, const QString &method, const QVariant &, QJSValue cb, int) {
+        const QString r = (method == "snapshot" || method == "setViewMonth") ? m_backend->budgetJson() : QString();
+        fprintf(stderr, "[CALL] %s\n", qPrintable(method));
+        QTimer::singleShot(0, this, [cb, r]() mutable { if (cb.isCallable()) cb.call(QJSValueList{ QJSValue(r) }); });
+    }
 signals:
     void viewModuleReadyChanged(QString, bool);
 private:
