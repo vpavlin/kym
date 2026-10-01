@@ -284,7 +284,7 @@ Item {
         implicitHeight: 30; implicitWidth: bt.implicitWidth + 22; radius: 6
         color: ma.containsMouse || active ? root.accent : (primary ? root.accent : root.panel)
         border.color: root.line; border.width: 1
-        Text { id: bt; anchors.centerIn: parent; text: parent.label
+        Text { textFormat: Text.PlainText; id: bt; anchors.centerIn: parent; text: parent.label
                color: (ma.containsMouse || parent.active || parent.primary) ? root.bg : root.fg; font.pixelSize: 13 }
         MouseArea { id: ma; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: parent.clicked() }
     }
@@ -306,21 +306,21 @@ Item {
         currentIndex: -1
         font.pixelSize: 13
         implicitWidth: 150; implicitHeight: 30
-        contentItem: Text {
+        contentItem: Text { textFormat: Text.PlainText;
             text: dp.currentIndex >= 0 ? dp.displayText : dp.placeholderText
             color: dp.currentIndex >= 0 ? root.fg : root.dim
             font.pixelSize: 13; leftPadding: 10; rightPadding: 26
             verticalAlignment: Text.AlignVCenter; elide: Text.ElideRight
         }
         background: Rectangle { color: "#0b0d12"; border.color: dp.popup.visible ? root.accent : root.line; border.width: 1; radius: 5 }
-        indicator: Text {
+        indicator: Text { textFormat: Text.PlainText;
             x: dp.width - width - 9; y: (dp.height - height) / 2
             text: "▾"; color: root.dim; font.pixelSize: 11
         }
         delegate: ItemDelegate {
             width: dp.width; implicitHeight: 30
             highlighted: dp.highlightedIndex === index
-            contentItem: Text { text: modelData; color: root.fg; font.pixelSize: 13; leftPadding: 6; verticalAlignment: Text.AlignVCenter }
+            contentItem: Text { textFormat: Text.PlainText; text: modelData; color: root.fg; font.pixelSize: 13; leftPadding: 6; verticalAlignment: Text.AlignVCenter }
             background: Rectangle { color: highlighted ? root.line : "#0b0d12" }
         }
         popup: Popup {
@@ -352,7 +352,7 @@ Item {
                     spacing: 4
                     RowLayout {
                         spacing: 12
-                        Text { text: "KYM — Know Your Money"; color: fg; font.pixelSize: 20; font.bold: true }
+                        Text { textFormat: Text.PlainText; text: "KYM — Know Your Money"; color: fg; font.pixelSize: 20; font.bold: true }
                         // Budget switcher — the current budget, coloured, always
                         // visible. Click to switch or add. THE thing that makes
                         // "which budget am I in" unmistakable.
@@ -364,8 +364,8 @@ Item {
                             RowLayout {
                                 id: bswRow; anchors.centerIn: parent; spacing: 7
                                 Rectangle { implicitWidth: 11; implicitHeight: 11; radius: 6; color: accent }
-                                Text { text: root.currentBudgetName; color: fg; font.pixelSize: 14; font.bold: true }
-                                Text { text: "▾"; color: dim; font.pixelSize: 12 }
+                                Text { textFormat: Text.PlainText; text: root.currentBudgetName; color: fg; font.pixelSize: 14; font.bold: true }
+                                Text { textFormat: Text.PlainText; text: "▾"; color: dim; font.pixelSize: 12 }
                             }
                             MouseArea { id: bswMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
                                 onClicked: budgetPop.open() }
@@ -383,9 +383,9 @@ Item {
                                             RowLayout {
                                                 anchors.fill: parent; anchors.leftMargin: 8; anchors.rightMargin: 8; spacing: 8
                                                 Rectangle { implicitWidth: 11; implicitHeight: 11; radius: 6; color: modelData.color || root.dim }
-                                                Text { text: modelData.name; color: fg; font.pixelSize: 13; Layout.fillWidth: true; font.bold: modelData.current === true }
-                                                Text { text: (modelData.events || 0) + " ev"; color: dim; font.pixelSize: 10 }
-                                                Text { visible: modelData.current === true; text: "✓"; color: accent; font.pixelSize: 13 }
+                                                Text { textFormat: Text.PlainText; text: modelData.name; color: fg; font.pixelSize: 13; Layout.fillWidth: true; font.bold: modelData.current === true }
+                                                Text { textFormat: Text.PlainText; text: (modelData.events || 0) + " ev"; color: dim; font.pixelSize: 10 }
+                                                Text { textFormat: Text.PlainText; visible: modelData.current === true; text: "✓"; color: accent; font.pixelSize: 13 }
                                             }
                                             MouseArea { id: bItemMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
                                                 onClicked: { budgetPop.close(); if (modelData.current !== true) run(callCore("selectBudget", [modelData.id]), "Switched to " + modelData.name); } }
@@ -396,7 +396,7 @@ Item {
                                                 anchors.right: parent.right; anchors.rightMargin: 6; anchors.verticalCenter: parent.verticalCenter
                                                 implicitWidth: 20; implicitHeight: 20; radius: 4
                                                 color: bDelMa.containsMouse ? warn : root.panel
-                                                Text { anchors.centerIn: parent; text: "🗑"; font.pixelSize: 12 }
+                                                Text { textFormat: Text.PlainText; anchors.centerIn: parent; text: "🗑"; font.pixelSize: 12 }
                                                 MouseArea { id: bDelMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
                                                     onClicked: bDelConfirm.open() }
                                                 Popup {
@@ -405,8 +405,8 @@ Item {
                                                     background: Rectangle { color: root.panel; border.color: warn; border.width: 1; radius: 8 }
                                                     contentItem: ColumnLayout {
                                                         spacing: 7
-                                                        Text { text: "Delete \"" + modelData.name + "\"?"; color: fg; font.pixelSize: 13; font.bold: true; wrapMode: Text.WordWrap; Layout.fillWidth: true }
-                                                        Text { text: "Removes it + its household key from THIS device (log + key deleted). Copies on other devices are untouched — re-join with the code to get it back. Can't be undone."
+                                                        Text { textFormat: Text.PlainText; text: "Delete \"" + modelData.name + "\"?"; color: fg; font.pixelSize: 13; font.bold: true; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+                                                        Text { textFormat: Text.PlainText; text: "Removes it + its household key from THIS device (log + key deleted). Copies on other devices are untouched — re-join with the code to get it back. Can't be undone."
                                                                color: dim; font.pixelSize: 11; wrapMode: Text.WordWrap; Layout.fillWidth: true }
                                                         RowLayout {
                                                             Item { Layout.fillWidth: true }
@@ -423,7 +423,7 @@ Item {
                                     Rectangle {
                                         Layout.fillWidth: true; implicitHeight: 32; radius: 6
                                         color: newBMa.containsMouse ? root.line : "transparent"
-                                        Text { anchors.left: parent.left; anchors.leftMargin: 8; anchors.verticalCenter: parent.verticalCenter
+                                        Text { textFormat: Text.PlainText; anchors.left: parent.left; anchors.leftMargin: 8; anchors.verticalCenter: parent.verticalCenter
                                                text: "＋  New budget"; color: accent; font.pixelSize: 13; font.bold: true }
                                         MouseArea { id: newBMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
                                             onClicked: { budgetPop.close(); root.addingBudget = true; newBudgetField.forceActiveFocus(); } }
@@ -453,18 +453,18 @@ Item {
                             opacity: enabled ? 1 : 0.35
                             color: prevMa.containsMouse && enabled ? accent : panel
                             border.color: line; border.width: 1
-                            Text { anchors.centerIn: parent; text: "‹"; font.pixelSize: 14; color: prevMa.containsMouse && parent.enabled ? bg : fg }
+                            Text { textFormat: Text.PlainText; anchors.centerIn: parent; text: "‹"; font.pixelSize: 14; color: prevMa.containsMouse && parent.enabled ? bg : fg }
                             MouseArea { id: prevMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
                                 onClicked: if (parent.enabled) root.gotoMonth(root.monthShift(root.viewMonth, -1)) }
                         }
-                        Text { text: root.viewMonth; color: fg; font.pixelSize: 14; font.bold: true
+                        Text { textFormat: Text.PlainText; text: root.viewMonth; color: fg; font.pixelSize: 14; font.bold: true
                                horizontalAlignment: Text.AlignHCenter; Layout.minimumWidth: 64 }
                         Rectangle {
                             visible: root.hasMonthNav
                             implicitWidth: 24; implicitHeight: 24; radius: 5
                             color: nextMa.containsMouse ? accent : panel
                             border.color: line; border.width: 1
-                            Text { anchors.centerIn: parent; text: "›"; font.pixelSize: 14; color: nextMa.containsMouse ? bg : fg }
+                            Text { textFormat: Text.PlainText; anchors.centerIn: parent; text: "›"; font.pixelSize: 14; color: nextMa.containsMouse ? bg : fg }
                             MouseArea { id: nextMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
                                 onClicked: root.gotoMonth(root.monthShift(root.viewMonth, 1)) }
                         }
@@ -472,13 +472,13 @@ Item {
                             visible: root.hasMonthNav && !root.isCurrentMonth
                             implicitWidth: todayT.implicitWidth + 16; implicitHeight: 24; radius: 5
                             color: todayMa.containsMouse ? accent : "transparent"; border.color: accent; border.width: 1
-                            Text { id: todayT; anchors.centerIn: parent; text: "Today"; font.pixelSize: 11; color: todayMa.containsMouse ? bg : accent }
+                            Text { textFormat: Text.PlainText; id: todayT; anchors.centerIn: parent; text: "Today"; font.pixelSize: 11; color: todayMa.containsMouse ? bg : accent }
                             MouseArea { id: todayMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
                                 onClicked: root.gotoMonth("") }
                         }
                         RowLayout {
                             spacing: 6
-                            Text { text: "·"; color: dim; font.pixelSize: 12 }
+                            Text { textFormat: Text.PlainText; text: "·"; color: dim; font.pixelSize: 12 }
                             Rectangle {
                                 implicitWidth: 8; implicitHeight: 8; radius: 4; color: root.syncColor
                                 // pulse while busy; snap back to full opacity when idle
@@ -490,7 +490,7 @@ Item {
                                     NumberAnimation { to: 1.0; duration: 520 }
                                 }
                             }
-                            Text { text: root.syncLabel; color: dim; font.pixelSize: 12; verticalAlignment: Text.AlignVCenter
+                            Text { textFormat: Text.PlainText; text: root.syncLabel; color: dim; font.pixelSize: 12; verticalAlignment: Text.AlignVCenter
                                    ToolTip.visible: syncHov.hovered; ToolTip.text: status }
                             HoverHandler { id: syncHov }
                         }
@@ -504,14 +504,14 @@ Item {
                     implicitWidth: rta.implicitWidth + 28; implicitHeight: 52
                     ColumnLayout {
                         id: rta; anchors.centerIn: parent; spacing: 0
-                        Text { text: "Ready to Assign"; color: dim; font.pixelSize: 11; Layout.alignment: Qt.AlignHCenter }
-                        Text {
+                        Text { textFormat: Text.PlainText; text: "Ready to Assign"; color: dim; font.pixelSize: 11; Layout.alignment: Qt.AlignHCenter }
+                        Text { textFormat: Text.PlainText;
                             Layout.alignment: Qt.AlignHCenter
                             text: "" + (budget.readyToAssign || "0.00")
                             color: (budget.readyToAssignRaw < 0) ? warn : (budget.readyToAssignRaw === 0 ? good : accent)
                             font.pixelSize: 20; font.bold: true
                         }
-                        Text {
+                        Text { textFormat: Text.PlainText;
                             Layout.alignment: Qt.AlignHCenter
                             text: budget.readyToAssignRaw < 0 ? "⚠ over-assigned"
                                 : (budget.readyToAssignRaw === 0 ? "✓ all assigned" : "to assign")
@@ -525,7 +525,7 @@ Item {
                     implicitWidth: 40; implicitHeight: 40; radius: 8
                     color: txMa.containsMouse || root.showTx ? accent : panel
                     border.color: line; border.width: 1
-                    Text { anchors.centerIn: parent; text: "📋"; font.pixelSize: 18
+                    Text { textFormat: Text.PlainText; anchors.centerIn: parent; text: "📋"; font.pixelSize: 18
                            color: (txMa.containsMouse || root.showTx) ? bg : fg }
                     MouseArea { id: txMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
                         onClicked: root.openTx(!root.showTx) }
@@ -536,7 +536,7 @@ Item {
                     implicitWidth: 40; implicitHeight: 40; radius: 8
                     color: gearMa.containsMouse || root.showSettings ? accent : panel
                     border.color: line; border.width: 1
-                    Text { anchors.centerIn: parent; text: "⚙"; font.pixelSize: 20
+                    Text { textFormat: Text.PlainText; anchors.centerIn: parent; text: "⚙"; font.pixelSize: 20
                            color: (gearMa.containsMouse || root.showSettings) ? bg : fg }
                     MouseArea { id: gearMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
                         onClicked: root.openSettings(!root.showSettings) }
@@ -554,7 +554,7 @@ Item {
                     width: parent.width
                     spacing: 14
 
-                    Text { text: "Settings"; color: fg; font.pixelSize: 16; font.bold: true }
+                    Text { textFormat: Text.PlainText; text: "Settings"; color: fg; font.pixelSize: 16; font.bold: true }
 
                     // Your name (attribution) — gated on a core that reports it
                     Rectangle {
@@ -564,8 +564,8 @@ Item {
                         ColumnLayout {
                             id: nameCol; anchors.left: parent.left; anchors.right: parent.right
                             anchors.verticalCenter: parent.verticalCenter; anchors.margins: 14; spacing: 6
-                            Text { text: "Your name"; color: fg; font.pixelSize: 14; font.bold: true }
-                            Text { text: "Stamped on transactions you add, so a shared budget shows who did what. Leave empty for no attribution."
+                            Text { textFormat: Text.PlainText; text: "Your name"; color: fg; font.pixelSize: 14; font.bold: true }
+                            Text { textFormat: Text.PlainText; text: "Stamped on transactions you add, so a shared budget shows who did what. Leave empty for no attribution."
                                    color: dim; font.pixelSize: 11; Layout.fillWidth: true; wrapMode: Text.WordWrap }
                             RowLayout {
                                 spacing: 8
@@ -587,8 +587,8 @@ Item {
                         ColumnLayout {
                             id: devCol; anchors.left: parent.left; anchors.right: parent.right
                             anchors.verticalCenter: parent.verticalCenter; anchors.margins: 14; spacing: 6
-                            Text { text: "Device name"; color: fg; font.pixelSize: 14; font.bold: true }
-                            Text { text: "Identifies this device on the sync channel and authors its events (the “dev” shown in the raw event log). Must be unique per device. A random name is set on first run — rename it to something recognizable."
+                            Text { textFormat: Text.PlainText; text: "Device name"; color: fg; font.pixelSize: 14; font.bold: true }
+                            Text { textFormat: Text.PlainText; text: "Identifies this device on the sync channel and authors its events (the “dev” shown in the raw event log). Must be unique per device. A random name is set on first run — rename it to something recognizable."
                                    color: dim; font.pixelSize: 11; Layout.fillWidth: true; wrapMode: Text.WordWrap }
                             RowLayout {
                                 spacing: 8
@@ -609,8 +609,8 @@ Item {
                         ColumnLayout {
                             id: seedCol; anchors.left: parent.left; anchors.right: parent.right
                             anchors.verticalCenter: parent.verticalCenter; anchors.margins: 14; spacing: 6
-                            Text { text: "Starter budget"; color: fg; font.pixelSize: 14; font.bold: true }
-                            Text { text: "Seed accounts, groups, categories and this month's assignments so the budget is meaningful immediately. Only works on an empty budget."
+                            Text { textFormat: Text.PlainText; text: "Starter budget"; color: fg; font.pixelSize: 14; font.bold: true }
+                            Text { textFormat: Text.PlainText; text: "Seed accounts, groups, categories and this month's assignments so the budget is meaningful immediately. Only works on an empty budget."
                                    color: dim; font.pixelSize: 11; Layout.fillWidth: true; wrapMode: Text.WordWrap }
                             Btn { label: "Seed starter budget"; primary: true; onClicked: run(callCore("loadDemo", []), "Starter budget added") }
                         }
@@ -623,8 +623,8 @@ Item {
                         ColumnLayout {
                             id: pairCol; anchors.left: parent.left; anchors.right: parent.right
                             anchors.verticalCenter: parent.verticalCenter; anchors.margins: 14; spacing: 8
-                            Text { text: "Share this budget"; color: fg; font.pixelSize: 14; font.bold: true }
-                            Text { text: "Show this code/QR on another device — your own phone/laptop, or a partner — to join THIS budget. It starts empty and syncs from scratch. Each budget is shared separately; a device you don't share it with never sees it."
+                            Text { textFormat: Text.PlainText; text: "Share this budget"; color: fg; font.pixelSize: 14; font.bold: true }
+                            Text { textFormat: Text.PlainText; text: "Show this code/QR on another device — your own phone/laptop, or a partner — to join THIS budget. It starts empty and syncs from scratch. Each budget is shared separately; a device you don't share it with never sees it."
                                    color: dim; font.pixelSize: 11; wrapMode: Text.WordWrap; Layout.fillWidth: true }
                             RowLayout {
                                 spacing: 14
@@ -647,7 +647,7 @@ Item {
                                 }
                                 ColumnLayout {
                                     spacing: 4
-                                    Text { text: root.qrData ? "Scan with the KYM phone app" : "Share this code to pair:"; color: dim; font.pixelSize: 11 }
+                                    Text { textFormat: Text.PlainText; text: root.qrData ? "Scan with the KYM phone app" : "Share this code to pair:"; color: dim; font.pixelSize: 11 }
                                     // Selectable (readOnly TextEdit) so you can drag-select + Ctrl+C;
                                     // the Copy buttons below are the one-click path.
                                     TextEdit {
@@ -657,7 +657,7 @@ Item {
                                         color: fg; font.pixelSize: 12; font.family: "monospace"
                                         Layout.maximumWidth: 320; wrapMode: TextEdit.WrapAnywhere
                                     }
-                                    Text { text: "fingerprint: " + (budget.fingerprint || "—"); color: accent; font.pixelSize: 10 }
+                                    Text { textFormat: Text.PlainText; text: "fingerprint: " + (budget.fingerprint || "—"); color: accent; font.pixelSize: 10 }
                                     RowLayout {
                                         spacing: 6
                                         Btn { label: "Copy code"; onClicked: { rawCode.selectAll(); rawCode.copy(); showToast("Pairing code copied", false); } }
@@ -687,7 +687,7 @@ Item {
                         ColumnLayout {
                             id: syncCol; anchors.left: parent.left; anchors.right: parent.right
                             anchors.verticalCenter: parent.verticalCenter; anchors.margins: 14; spacing: 8
-                            Text { text: "Sync"; color: fg; font.pixelSize: 14; font.bold: true }
+                            Text { textFormat: Text.PlainText; text: "Sync"; color: fg; font.pixelSize: 14; font.bold: true }
                             RowLayout {
                                 spacing: 10
                                 Btn { label: "Sync now"; onClicked: run(callCore("resync", []), "Asked peers + re-served our log") }
@@ -701,10 +701,10 @@ Item {
                                         NumberAnimation { to: 1.0; duration: 520 }
                                     }
                                 }
-                                Text { text: root.syncLabel; color: fg; font.pixelSize: 12; font.bold: true; verticalAlignment: Text.AlignVCenter }
-                                Text { text: "· " + status; color: dim; font.pixelSize: 11; verticalAlignment: Text.AlignVCenter }
+                                Text { textFormat: Text.PlainText; text: root.syncLabel; color: fg; font.pixelSize: 12; font.bold: true; verticalAlignment: Text.AlignVCenter }
+                                Text { textFormat: Text.PlainText; text: "· " + status; color: dim; font.pixelSize: 11; verticalAlignment: Text.AlignVCenter }
                             }
-                            Text {
+                            Text { textFormat: Text.PlainText;
                                 visible: budget.sync !== undefined
                                 color: dim; font.pixelSize: 11; Layout.fillWidth: true; wrapMode: Text.WordWrap
                                 text: {
@@ -735,13 +735,13 @@ Item {
 
                     RowLayout {
                         Layout.fillWidth: true
-                        Text { text: "Transactions"; color: fg; font.pixelSize: 17; font.bold: true; topPadding: 2 }
-                        Text { text: "  " + ((budget.transactions || []).length) + " total"; color: dim; font.pixelSize: 12 }
+                        Text { textFormat: Text.PlainText; text: "Transactions"; color: fg; font.pixelSize: 17; font.bold: true; topPadding: 2 }
+                        Text { textFormat: Text.PlainText; text: "  " + ((budget.transactions || []).length) + " total"; color: dim; font.pixelSize: 12 }
                         Item { Layout.fillWidth: true }
                         Btn { label: "← Back to budget"; onClicked: root.openTx(false) }
                     }
 
-                    Text {
+                    Text { textFormat: Text.PlainText;
                         visible: (budget.transactions || []).length === 0
                         text: "No expenses or income yet."; color: dim; font.pixelSize: 13; topPadding: 8
                     }
@@ -749,10 +749,10 @@ Item {
                     RowLayout {
                         visible: (budget.transactions || []).length > 0
                         Layout.fillWidth: true; Layout.topMargin: 6
-                        Text { text: "DATE"; color: dim; font.pixelSize: 11; Layout.preferredWidth: 100 }
-                        Text { text: "CATEGORY"; color: dim; font.pixelSize: 11; Layout.fillWidth: true }
-                        Text { text: "ACCOUNT"; color: dim; font.pixelSize: 11; Layout.preferredWidth: 120 }
-                        Text { text: "AMOUNT"; color: dim; font.pixelSize: 11; Layout.preferredWidth: 120; horizontalAlignment: Text.AlignRight }
+                        Text { textFormat: Text.PlainText; text: "DATE"; color: dim; font.pixelSize: 11; Layout.preferredWidth: 100 }
+                        Text { textFormat: Text.PlainText; text: "CATEGORY"; color: dim; font.pixelSize: 11; Layout.fillWidth: true }
+                        Text { textFormat: Text.PlainText; text: "ACCOUNT"; color: dim; font.pixelSize: 11; Layout.preferredWidth: 120 }
+                        Text { textFormat: Text.PlainText; text: "AMOUNT"; color: dim; font.pixelSize: 11; Layout.preferredWidth: 120; horizontalAlignment: Text.AlignRight }
                     }
                     Repeater {
                         model: budget.transactions || []
@@ -763,17 +763,17 @@ Item {
                             HoverHandler { id: txRowHover }
                             RowLayout {
                                 anchors.fill: parent; anchors.leftMargin: 10; anchors.rightMargin: 10
-                                Text { text: (modelData.date || "").substring(0, 10); color: dim; font.pixelSize: 13; Layout.preferredWidth: 100 }
+                                Text { textFormat: Text.PlainText; text: (modelData.date || "").substring(0, 10); color: dim; font.pixelSize: 13; Layout.preferredWidth: 100 }
                                 RowLayout {
                                     Layout.fillWidth: true; spacing: 6
-                                    Text { text: modelData.category || ""; color: fg; font.pixelSize: 14; elide: Text.ElideRight; Layout.maximumWidth: 360 }
+                                    Text { textFormat: Text.PlainText; text: modelData.category || ""; color: fg; font.pixelSize: 14; elide: Text.ElideRight; Layout.maximumWidth: 360 }
                                     // Who added / last-edited it — only on a shared budget (author set).
-                                    Text { visible: (modelData.author || "") !== ""; text: "· " + modelData.author
+                                    Text { textFormat: Text.PlainText; visible: (modelData.author || "") !== ""; text: "· " + modelData.author
                                            color: dim; font.pixelSize: 11 }
                                     Item { Layout.fillWidth: true }
                                 }
-                                Text { text: modelData.account || ""; color: dim; font.pixelSize: 13; Layout.preferredWidth: 120; elide: Text.ElideRight }
-                                Text {
+                                Text { textFormat: Text.PlainText; text: modelData.account || ""; color: dim; font.pixelSize: 13; Layout.preferredWidth: 120; elide: Text.ElideRight }
+                                Text { textFormat: Text.PlainText;
                                     text: modelData.amount || ""
                                     color: modelData.kind === "income" ? good : fg
                                     font.pixelSize: 14; font.bold: true
@@ -786,7 +786,7 @@ Item {
                                     Layout.preferredWidth: 22; implicitHeight: 22; radius: 4
                                     visible: txRowHover.hovered || (root.editTxnData && root.editTxnData.id === modelData.id)
                                     color: editTxnMa.containsMouse ? accent : "transparent"
-                                    Text { anchors.centerIn: parent; text: "✎"; font.pixelSize: 13; color: editTxnMa.containsMouse ? bg : dim }
+                                    Text { textFormat: Text.PlainText; anchors.centerIn: parent; text: "✎"; font.pixelSize: 13; color: editTxnMa.containsMouse ? bg : dim }
                                     MouseArea { id: editTxnMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
                                         onClicked: { root.editTxnData = modelData; editTxnPop.open(); } }
                                     ToolTip.visible: editTxnMa.containsMouse; ToolTip.text: "Edit / delete"
@@ -797,7 +797,7 @@ Item {
 
                     // ── Developer: raw event log (collapsible) ──
                     Rectangle { Layout.fillWidth: true; Layout.topMargin: 18; implicitHeight: 1; color: line }
-                    Text {
+                    Text { textFormat: Text.PlainText;
                         text: (root.showDev ? "▾ " : "▸ ") + "Developer — raw event log  (" + ((budget.events || []).length) + " events)"
                         color: accent; font.pixelSize: 12; font.bold: true; topPadding: 8; bottomPadding: 4
                         TapHandler { onTapped: root.showDev = !root.showDev }
@@ -806,24 +806,24 @@ Item {
                         model: root.showDev ? (budget.events || []) : []
                         delegate: Rectangle {
                             Layout.fillWidth: true
-                            implicitHeight: devCol.implicitHeight + 8
+                            implicitHeight: evCol.implicitHeight + 8
                             color: (index % 2) ? "transparent" : "#0b0d12"; radius: 4
                             ColumnLayout {
-                                id: devCol
+                                id: evCol
                                 anchors.left: parent.left; anchors.right: parent.right
                                 anchors.verticalCenter: parent.verticalCenter
                                 anchors.leftMargin: 8; anchors.rightMargin: 8; spacing: 1
                                 RowLayout {
                                     Layout.fillWidth: true; spacing: 8
-                                    Text { text: "#" + modelData.seq; color: dim; font.pixelSize: 11; font.family: "monospace" }
-                                    Text { text: modelData.type || ""; color: accent; font.pixelSize: 12; font.bold: true; font.family: "monospace" }
+                                    Text { textFormat: Text.PlainText; text: "#" + modelData.seq; color: dim; font.pixelSize: 11; font.family: "monospace" }
+                                    Text { textFormat: Text.PlainText; text: modelData.type || ""; color: accent; font.pixelSize: 12; font.bold: true; font.family: "monospace" }
                                     Item { Layout.fillWidth: true }
                                     // Author (device id). Highlighted when it's THIS device's own event.
-                                    Text { text: modelData.dev ? "by " + modelData.dev : ""
+                                    Text { textFormat: Text.PlainText; text: modelData.dev ? "by " + modelData.dev : ""
                                            color: (modelData.dev && modelData.dev === root.deviceName) ? accent : dim
                                            font.pixelSize: 10; font.family: "monospace" }
                                 }
-                                Text {
+                                Text { textFormat: Text.PlainText;
                                     Layout.fillWidth: true
                                     text: JSON.stringify(modelData.payload || {})
                                     color: fg; font.pixelSize: 11; font.family: "monospace"
@@ -865,7 +865,7 @@ Item {
                     RowLayout {
                         visible: root.hasMultiBudget; spacing: 5
                         Rectangle { implicitWidth: 9; implicitHeight: 9; radius: 5; color: accent }
-                        Text { text: root.currentBudgetName; color: accent; font.pixelSize: 12; font.bold: true }
+                        Text { textFormat: Text.PlainText; text: root.currentBudgetName; color: accent; font.pixelSize: 12; font.bold: true }
                         Rectangle { implicitWidth: 1; implicitHeight: 22; color: line }
                     }
 
@@ -913,10 +913,10 @@ Item {
             RowLayout {
                 visible: root.showGrid && !root.isEmpty
                 Layout.fillWidth: true
-                Text { text: "CATEGORY"; color: dim; font.pixelSize: 11; Layout.fillWidth: true }
-                Text { text: "ASSIGNED"; color: dim; font.pixelSize: 11; Layout.preferredWidth: 110; horizontalAlignment: Text.AlignRight }
-                Text { text: "ACTIVITY"; color: dim; font.pixelSize: 11; Layout.preferredWidth: 110; horizontalAlignment: Text.AlignRight }
-                Text { text: "AVAILABLE"; color: dim; font.pixelSize: 11; Layout.preferredWidth: 120; horizontalAlignment: Text.AlignRight }
+                Text { textFormat: Text.PlainText; text: "CATEGORY"; color: dim; font.pixelSize: 11; Layout.fillWidth: true }
+                Text { textFormat: Text.PlainText; text: "ASSIGNED"; color: dim; font.pixelSize: 11; Layout.preferredWidth: 110; horizontalAlignment: Text.AlignRight }
+                Text { textFormat: Text.PlainText; text: "ACTIVITY"; color: dim; font.pixelSize: 11; Layout.preferredWidth: 110; horizontalAlignment: Text.AlignRight }
+                Text { textFormat: Text.PlainText; text: "AVAILABLE"; color: dim; font.pixelSize: 11; Layout.preferredWidth: 120; horizontalAlignment: Text.AlignRight }
             }
 
             // ================= EMPTY STATE =================
@@ -927,8 +927,8 @@ Item {
                 visible: root.showGrid && root.isEmpty && !root.addingGroup
                 Layout.fillWidth: true; Layout.fillHeight: true
                 Item { Layout.fillHeight: true }
-                Text { text: "Your budget is empty"; color: fg; font.pixelSize: 18; font.bold: true; Layout.alignment: Qt.AlignHCenter }
-                Text { text: "Start with a ready-made budget, or build your own from the list."; color: dim; font.pixelSize: 13; Layout.alignment: Qt.AlignHCenter }
+                Text { textFormat: Text.PlainText; text: "Your budget is empty"; color: fg; font.pixelSize: 18; font.bold: true; Layout.alignment: Qt.AlignHCenter }
+                Text { textFormat: Text.PlainText; text: "Start with a ready-made budget, or build your own from the list."; color: dim; font.pixelSize: 13; Layout.alignment: Qt.AlignHCenter }
                 Item { implicitHeight: 6 }
                 Btn { label: "Seed a starter budget"; primary: true; Layout.alignment: Qt.AlignHCenter
                       onClicked: run(callCore("loadDemo", []), "Starter budget added") }
@@ -964,7 +964,7 @@ Item {
                             RowLayout {
                                 Layout.fillWidth: true
                                 HoverHandler { id: grpHeadHover }
-                                Text {
+                                Text { textFormat: Text.PlainText;
                                     text: (grp.isCollapsed ? "▸ " : "▾ ") + grp.groupName
                                     color: accent; font.pixelSize: 13; font.bold: true; topPadding: 8; bottomPadding: 4
                                     TapHandler { onTapped: root.toggleGroup(grp.groupName) }
@@ -975,7 +975,7 @@ Item {
                                     visible: grpHeadHover.hovered
                                     implicitWidth: 24; implicitHeight: 22; radius: 5
                                     color: delGrpMa.containsMouse ? warn : "transparent"; border.color: line; border.width: 1
-                                    Text { anchors.centerIn: parent; text: "🗑"; font.pixelSize: 11; color: delGrpMa.containsMouse ? bg : dim }
+                                    Text { textFormat: Text.PlainText; anchors.centerIn: parent; text: "🗑"; font.pixelSize: 11; color: delGrpMa.containsMouse ? bg : dim }
                                     MouseArea { id: delGrpMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
                                         onClicked: run(callCore("deleteGroup", [grp.groupName]), "Group deleted") }
                                     ToolTip.visible: delGrpMa.containsMouse; ToolTip.text: "Delete group (must be empty)"
@@ -984,7 +984,7 @@ Item {
                                     implicitWidth: 84; implicitHeight: 22; radius: 5
                                     color: addCatMa.containsMouse ? accent : "transparent"
                                     border.color: line; border.width: 1
-                                    Text { anchors.centerIn: parent; text: "＋ category"; font.pixelSize: 10
+                                    Text { textFormat: Text.PlainText; anchors.centerIn: parent; text: "＋ category"; font.pixelSize: 10
                                            color: addCatMa.containsMouse ? bg : dim }
                                     MouseArea { id: addCatMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
                                         onClicked: { grp.addingCat = true; catNameField.forceActiveFocus(); } }
@@ -1013,7 +1013,7 @@ Item {
                                     RowLayout {
                                         anchors.fill: parent
                                         anchors.leftMargin: 10; anchors.rightMargin: 10
-                                        Text { text: modelData.name; color: fg; font.pixelSize: 14 }
+                                        Text { textFormat: Text.PlainText; text: modelData.name; color: fg; font.pixelSize: 14 }
                                         // Delete / archive — on hover, with a confirm. A history-free
                                         // category can be deleted; one WITH history is archived (hidden,
                                         // kept) and the core refuses unless its balance is 0.
@@ -1021,7 +1021,7 @@ Item {
                                             visible: rowHover.hovered || delConfirm.opened
                                             implicitWidth: 18; implicitHeight: 18; radius: 4
                                             color: delCatMa.containsMouse ? warn : "transparent"
-                                            Text { anchors.centerIn: parent; text: modelData.canDelete === false ? "⊟" : "×"; font.pixelSize: 14; color: delCatMa.containsMouse ? bg : dim }
+                                            Text { textFormat: Text.PlainText; anchors.centerIn: parent; text: modelData.canDelete === false ? "⊟" : "×"; font.pixelSize: 14; color: delCatMa.containsMouse ? bg : dim }
                                             MouseArea { id: delCatMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
                                                 onClicked: delConfirm.open() }
                                             ToolTip.visible: delCatMa.containsMouse && !delConfirm.opened
@@ -1032,9 +1032,9 @@ Item {
                                                 background: Rectangle { color: root.panel; border.color: warn; border.width: 1; radius: 8 }
                                                 contentItem: ColumnLayout {
                                                     spacing: 7
-                                                    Text { text: (modelData.canDelete === false ? "Archive " : "Delete ") + "\"" + modelData.name + "\"?"
+                                                    Text { textFormat: Text.PlainText; text: (modelData.canDelete === false ? "Archive " : "Delete ") + "\"" + modelData.name + "\"?"
                                                            color: fg; font.pixelSize: 13; font.bold: true; wrapMode: Text.WordWrap; Layout.fillWidth: true }
-                                                    Text { visible: modelData.canDelete === false
+                                                    Text { textFormat: Text.PlainText; visible: modelData.canDelete === false
                                                            text: "It has history, so it's hidden (not deleted) — its balance must be 0 first."
                                                            color: dim; font.pixelSize: 11; wrapMode: Text.WordWrap; Layout.fillWidth: true }
                                                     RowLayout {
@@ -1048,12 +1048,12 @@ Item {
                                                 }
                                             }
                                         }
-                                        Text { text: modelData.target || ""; color: modelData.targetOnTrack ? good : accent; font.pixelSize: 11; Layout.fillWidth: true; leftPadding: 10; verticalAlignment: Text.AlignVCenter }
+                                        Text { textFormat: Text.PlainText; text: modelData.target || ""; color: modelData.targetOnTrack ? good : accent; font.pixelSize: 11; Layout.fillWidth: true; leftPadding: 10; verticalAlignment: Text.AlignVCenter }
                                         Item {
                                             id: asgCell
                                             Layout.preferredWidth: 110; implicitHeight: 28
                                             property bool editing: false
-                                            Text {
+                                            Text { textFormat: Text.PlainText;
                                                 visible: !asgCell.editing; anchors.fill: parent
                                                 text: "" + modelData.assigned
                                                 color: cellHover.hovered ? accent : dim
@@ -1083,15 +1083,15 @@ Item {
                                                 Keys.onEscapePressed: asgCell.editing = false
                                             }
                                         }
-                                        Text { text: "" + modelData.activity; color: dim; font.pixelSize: 14; Layout.preferredWidth: 110; horizontalAlignment: Text.AlignRight }
-                                        Text {
+                                        Text { textFormat: Text.PlainText; text: "" + modelData.activity; color: dim; font.pixelSize: 14; Layout.preferredWidth: 110; horizontalAlignment: Text.AlignRight }
+                                        Text { textFormat: Text.PlainText;
                                             text: (modelData.negative ? "⚠ " : "") + modelData.available
                                             color: availHover.hovered ? accent : (modelData.negative ? warn : good)
                                             font.pixelSize: 14; font.bold: true
                                             Layout.preferredWidth: 120; horizontalAlignment: Text.AlignRight
                                             HoverHandler { id: availHover; cursorShape: Qt.PointingHandCursor }
                                             TapHandler { onTapped: root.moveFrom(modelData.name) }
-                                            ToolTip.visible: availHover.hovered; ToolTip.text: "Move money from " + modelData.name
+                                            ToolTip.visible: availHover.hovered; ToolTip.text: "Move money from " + String(modelData.name).replace(/</g, "‹")
                                         }
                                     }
                                 }
@@ -1107,7 +1107,7 @@ Item {
                         implicitHeight: 34; radius: 6
                         color: addGrpMa.containsMouse ? accent : "transparent"
                         border.color: accent; border.width: 1
-                        Text { anchors.centerIn: parent; text: "＋  Add group"; font.pixelSize: 13; font.bold: true
+                        Text { textFormat: Text.PlainText; anchors.centerIn: parent; text: "＋  Add group"; font.pixelSize: 13; font.bold: true
                                color: addGrpMa.containsMouse ? bg : accent }
                         MouseArea { id: addGrpMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
                             onClicked: { root.addingGroup = true; groupNameField.forceActiveFocus(); } }
@@ -1128,7 +1128,7 @@ Item {
                         visible: root.archivedCats.length > 0
                         Layout.fillWidth: true; Layout.topMargin: 18; implicitHeight: 1; color: line
                     }
-                    Text {
+                    Text { textFormat: Text.PlainText;
                         visible: root.archivedCats.length > 0
                         text: (root.showArchived ? "▾ " : "▸ ") + "Archived  (" + root.archivedCats.length + ")"
                         color: dim; font.pixelSize: 12; font.bold: true; topPadding: 8; bottomPadding: 4
@@ -1142,13 +1142,13 @@ Item {
                             HoverHandler { id: arcHover }
                             RowLayout {
                                 anchors.fill: parent; anchors.leftMargin: 10; anchors.rightMargin: 10; spacing: 8
-                                Text { text: modelData.name; color: dim; font.pixelSize: 14; Layout.fillWidth: true }
-                                Text { text: "" + modelData.available; color: dim; font.pixelSize: 13 }
+                                Text { textFormat: Text.PlainText; text: modelData.name; color: dim; font.pixelSize: 14; Layout.fillWidth: true }
+                                Text { textFormat: Text.PlainText; text: "" + modelData.available; color: dim; font.pixelSize: 13 }
                                 Rectangle {
                                     visible: arcHover.hovered
                                     implicitWidth: unarcT.implicitWidth + 16; implicitHeight: 22; radius: 5
                                     color: unarcMa.containsMouse ? accent : "transparent"; border.color: accent; border.width: 1
-                                    Text { id: unarcT; anchors.centerIn: parent; text: "Un-archive"; font.pixelSize: 10; color: unarcMa.containsMouse ? bg : accent }
+                                    Text { textFormat: Text.PlainText; id: unarcT; anchors.centerIn: parent; text: "Un-archive"; font.pixelSize: 10; color: unarcMa.containsMouse ? bg : accent }
                                     MouseArea { id: unarcMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
                                         onClicked: run(callCore("unarchiveCategory", [modelData.name]), "Category restored") }
                                 }
@@ -1161,7 +1161,7 @@ Item {
                         visible: (budget.creditCardPayments || []).length > 0
                         Layout.fillWidth: true; Layout.topMargin: 18; implicitHeight: 1; color: line
                     }
-                    Text {
+                    Text { textFormat: Text.PlainText;
                         visible: (budget.creditCardPayments || []).length > 0
                         text: "CREDIT CARD PAYMENTS"; color: accent; font.pixelSize: 12; font.bold: true; topPadding: 8; bottomPadding: 4
                     }
@@ -1169,8 +1169,8 @@ Item {
                         model: budget.creditCardPayments || []
                         delegate: RowLayout {
                             Layout.fillWidth: true
-                            Text { text: modelData.name; color: fg; font.pixelSize: 14; Layout.fillWidth: true; leftPadding: 10 }
-                            Text { text: "" + modelData.available; color: good; font.pixelSize: 14; font.bold: true; Layout.preferredWidth: 120; horizontalAlignment: Text.AlignRight }
+                            Text { textFormat: Text.PlainText; text: modelData.name; color: fg; font.pixelSize: 14; Layout.fillWidth: true; leftPadding: 10 }
+                            Text { textFormat: Text.PlainText; text: "" + modelData.available; color: good; font.pixelSize: 14; font.bold: true; Layout.preferredWidth: 120; horizontalAlignment: Text.AlignRight }
                         }
                     }
 
@@ -1180,13 +1180,13 @@ Item {
                     }
                     RowLayout {
                         Layout.fillWidth: true; Layout.topMargin: 4
-                        Text { text: "ACCOUNTS"; color: accent; font.pixelSize: 12; font.bold: true; bottomPadding: 4 }
+                        Text { textFormat: Text.PlainText; text: "ACCOUNTS"; color: accent; font.pixelSize: 12; font.bold: true; bottomPadding: 4 }
                         Item { Layout.fillWidth: true }
                         Rectangle {
                             visible: !root.addingAccount
                             implicitWidth: 80; implicitHeight: 22; radius: 5
                             color: addAcctMa.containsMouse ? accent : "transparent"; border.color: line; border.width: 1
-                            Text { anchors.centerIn: parent; text: "＋ account"; font.pixelSize: 10; color: addAcctMa.containsMouse ? bg : dim }
+                            Text { textFormat: Text.PlainText; anchors.centerIn: parent; text: "＋ account"; font.pixelSize: 10; color: addAcctMa.containsMouse ? bg : dim }
                             MouseArea { id: addAcctMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
                                 onClicked: { root.addingAccount = true; acName.forceActiveFocus(); } }
                         }
@@ -1205,9 +1205,9 @@ Item {
                         model: budget.accounts || []
                         delegate: RowLayout {
                             Layout.fillWidth: true
-                            Text { text: modelData.name; color: fg; font.pixelSize: 14; Layout.fillWidth: true; leftPadding: 10 }
-                            Text { text: modelData.type; color: dim; font.pixelSize: 12; Layout.preferredWidth: 110; horizontalAlignment: Text.AlignRight }
-                            Text { text: "" + modelData.balance; color: fg; font.pixelSize: 14; Layout.preferredWidth: 120; horizontalAlignment: Text.AlignRight }
+                            Text { textFormat: Text.PlainText; text: modelData.name; color: fg; font.pixelSize: 14; Layout.fillWidth: true; leftPadding: 10 }
+                            Text { textFormat: Text.PlainText; text: modelData.type; color: dim; font.pixelSize: 12; Layout.preferredWidth: 110; horizontalAlignment: Text.AlignRight }
+                            Text { textFormat: Text.PlainText; text: "" + modelData.balance; color: fg; font.pixelSize: 14; Layout.preferredWidth: 120; horizontalAlignment: Text.AlignRight }
                         }
                     }
                 }
@@ -1230,7 +1230,7 @@ Item {
                 readonly property bool balanced: !budget.invariant || budget.invariant.ok
                 readonly property string rtaAbs: String(budget.readyToAssign || "0").replace("-", "").trim()
 
-                Text {
+                Text { textFormat: Text.PlainText;
                     anchors.fill: parent; anchors.leftMargin: 12; anchors.rightMargin: 12
                     horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
                     elide: Text.ElideRight
@@ -1270,7 +1270,7 @@ Item {
             radius: 8; color: root.toastError ? "#3a1e22" : "#16311f"
             border.color: root.toastError ? warn : good; border.width: 1
             implicitWidth: toastLbl.implicitWidth + 28; implicitHeight: 36
-            Text { id: toastLbl; anchors.centerIn: parent; text: root.toastText
+            Text { textFormat: Text.PlainText; id: toastLbl; anchors.centerIn: parent; text: root.toastText
                    color: root.toastError ? warn : good; font.pixelSize: 13 }
         }
 
@@ -1301,23 +1301,23 @@ Item {
                 spacing: 12
                 RowLayout {
                     Layout.fillWidth: true
-                    Text { text: "Edit transaction"; color: root.fg; font.pixelSize: 15; font.bold: true }
+                    Text { textFormat: Text.PlainText; text: "Edit transaction"; color: root.fg; font.pixelSize: 15; font.bold: true }
                     Item { Layout.fillWidth: true }
-                    Text { text: editTxnPop.isIncome ? "income" : "expense"
+                    Text { textFormat: Text.PlainText; text: editTxnPop.isIncome ? "income" : "expense"
                            color: editTxnPop.isIncome ? root.good : root.dim; font.pixelSize: 11 }
                 }
                 GridLayout {
                     columns: 2; columnSpacing: 10; rowSpacing: 9; Layout.fillWidth: true
-                    Text { text: "Amount"; color: root.dim; font.pixelSize: 12 }
+                    Text { textFormat: Text.PlainText; text: "Amount"; color: root.dim; font.pixelSize: 12 }
                     Field { id: eAmt; Layout.fillWidth: true; inputMethodHints: Qt.ImhFormattedNumbersOnly; placeholderText: "amount" }
-                    Text { text: "Category"; color: root.dim; font.pixelSize: 12; visible: !editTxnPop.isIncome }
+                    Text { textFormat: Text.PlainText; text: "Category"; color: root.dim; font.pixelSize: 12; visible: !editTxnPop.isIncome }
                     Drop { id: eCat; Layout.fillWidth: true; visible: !editTxnPop.isIncome; model: root.categoryNames; placeholderText: "category" }
-                    Text { text: "Account"; color: root.dim; font.pixelSize: 12 }
+                    Text { textFormat: Text.PlainText; text: "Account"; color: root.dim; font.pixelSize: 12 }
                     Drop { id: eAcct; Layout.fillWidth: true; model: root.accountNames; placeholderText: "account" }
-                    Text { text: "Date"; color: root.dim; font.pixelSize: 12 }
+                    Text { textFormat: Text.PlainText; text: "Date"; color: root.dim; font.pixelSize: 12 }
                     Field { id: eDate; Layout.fillWidth: true; placeholderText: "YYYY-MM-DD" }
                 }
-                Text {
+                Text { textFormat: Text.PlainText;
                     visible: editTxnPop.confirmDel
                     text: "Delete this transaction? This removes its money from the budget."
                     color: root.warn; font.pixelSize: 11; wrapMode: Text.WordWrap; Layout.fillWidth: true
