@@ -1150,12 +1150,11 @@ void KymCoreImpl::bootstrapDelivery() {
     // discovery/transport ports; discv5-udp-port is REQUIRED or discovery can't run and the
     // node stays at 0 peers (that was the long-standing "v0.2.0 won't mesh" bug). Verified:
     // this config dials the fleet (successfulConns, cluster 2) via loam_core → delivery v0.2.0.
+    // port/0.3: no fixed ports — loam_core defaults tcp/discv5 to random (0), so kym's node can't
+    // collide with another app's or a hub's on the same machine. loam_core maps preset logos.test
+    // to the network's parameters (RLN off unless rln:true) and pins the entry nodes.
     LogosMap cfg = {{"mode", "Core"}, {"preset", "logos.test"},
-        {"messagingOverrides", {
-            {"logLevel", dlog ? std::string(dlog) : std::string("INFO")},
-            {"tcp-port", 30303},
-            {"discv5-udp-port", 9000},
-        }}};
+        {"logLevel", dlog ? std::string(dlog) : std::string("INFO")}};
     // Diagnostic override: KYM_DELIVERY_CFG is a JSON object merged over the
     // default cfg, so a headless hub can try alternate WakuNodeConf keys (drop the
     // preset, disable rlnRelay, set a dataDir/ports) WITHOUT a rebuild while we pin
