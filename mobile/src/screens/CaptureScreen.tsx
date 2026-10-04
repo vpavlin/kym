@@ -261,7 +261,14 @@ export function CaptureScreen({ goSetup }: { goSetup: () => void }) {
   }
 
   return (
-    <View style={styles.root}>
+    // Scrolls: with a large system font (or a short screen) the content is taller than the
+    // screen, and a fixed View let Android squeeze the chip rows until their labels vanished.
+    <ScrollView
+      style={styles.root}
+      contentContainerStyle={styles.rootContent}
+      keyboardShouldPersistTaps="handled"
+      showsVerticalScrollIndicator={false}
+    >
       {/* Which budget this expense/income lands in — coloured, so you can never
           book to the wrong household (the #1 multi-budget UX rule). */}
       <View style={styles.budgetTag}>
@@ -422,7 +429,7 @@ export function CaptureScreen({ goSetup }: { goSetup: () => void }) {
       >
         <Text style={styles.saveText}>{mode === "income" ? "Save income" : "Save expense"}</Text>
       </Pressable>
-    </View>
+    </ScrollView>
   );
 }
 
@@ -455,7 +462,8 @@ const makeStyles = (accent: string) =>
   modeText: { color: theme.textDim, fontWeight: "700", fontSize: 14 },
   modeTextActive: { color: theme.accentText },
   incomeNote: { color: theme.good, textAlign: "center", marginTop: 12, fontWeight: "600" },
-  root: { flex: 1, paddingHorizontal: 16, paddingTop: 8 },
+  root: { flex: 1 },
+  rootContent: { paddingHorizontal: 16, paddingTop: 8, paddingBottom: 8 },
   budgetTag: { flexDirection: "row", alignItems: "center", gap: 6, alignSelf: "center", marginBottom: 2 },
   budgetTagDot: { width: 8, height: 8, borderRadius: 4 },
   budgetTagText: { fontSize: 13, fontWeight: "700" },
@@ -505,7 +513,7 @@ const makeStyles = (accent: string) =>
     minHeight: 20,
   },
   flashText: { color: theme.good, fontWeight: "600" },
-  chipRow: { flexGrow: 0, marginTop: 12 },
+  chipRow: { flexGrow: 0, flexShrink: 0, marginTop: 12 },  // never squeezed: a shrunk row hides its labels
   chipRowContent: { gap: 8, paddingRight: 8 },
   chip: {
     paddingHorizontal: 14,
