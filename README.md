@@ -55,29 +55,34 @@ $K budget ; $K report ; $K networth
 
 Full command set: `init · account · category · income · spend · assign · move · target · import · categorize · reconcile · report · networth · budget · accounts · sync · log`.
 
-## Install & distribute
+## Install
 
-**Desktop (Basecamp)** — install two packages, **`kym_core`** (the core module) and **`kym`** (the view). Add a package repository in Basecamp → Settings → Package Repositories:
+Published builds are listed on **[apps.vpavlin.xyz](https://apps.vpavlin.xyz/)**.
+
+**Desktop (Logos Basecamp 0.2.x, Linux x86_64).** In Basecamp, add this package repository:
 
 ```
-https://raw.githubusercontent.com/vpavlin/kym/master/repo/logos-repo.json
+https://apps.vpavlin.xyz/logos-repo.json
 ```
 
-Releases are cut by pushing a `module-v*` tag: CI builds the portable `.lgx` and refreshes `repo/index.json`. During active development the packages are also served from a **self-hosted LAN repo** (both modules rebuilt with `regen.sh` and served over HTTPS), which is how the maintainer's Basecamp installs day to day.
+Then install **`kym`** (listed as "KYM - Know Your Money"). It pulls in its core, `kym_core`, and `loam_core` automatically. Basecamp 0.3 support is coming (work in progress on the `port/0.3` branch).
 
-**Mobile app** — Android APK via a self-hosted **F-Droid** repo (arm64). The APK is built and **signed locally** (`scripts/build-apk.sh`) — the signing key never touches CI.
+**Android (arm64).** Add the F-Droid repository `https://apps.vpavlin.xyz/fdroid/repo` with fingerprint `2373710A76ACB09F287F053E99E533F9D3685529C44E9027CDBC79B1DC0C9105`. This one-tap link opens it in F-Droid: <https://apps.vpavlin.xyz/fdroid/repo?fingerprint=2373710A76ACB09F287F053E99E533F9D3685529C44E9027CDBC79B1DC0C9105>. Then install **KYM — Know Your Money**. [Loam](https://github.com/vpavlin/loam) is recommended: it runs one shared Logos Delivery node for all your Logos apps. Without Loam, KYM runs its own node. The APK is built and **signed locally** (`scripts/build-apk.sh`), so the signing key never touches CI.
+
+> `repo/logos-repo.json` in this repository is a stale, early index (kym 0.1.0 only, no `kym_core`). Don't use it. Use the apps.vpavlin.xyz URL above.
 
 ## Status
 
-The engine, contract, crypto, merge, and both module builds are green and cross-checked. **Cross-device sync works headless today** — an always-on `kym_core` hub, rebuilt against the fixed cpp-sdk, ingests a live Basecamp's edits two-way. The **mobile Delivery transport is still being stabilised on real hardware.**
+Latest public builds: Android **0.14.30**, Basecamp `kym` **0.6.11** + `kym_core` **0.7.9**.
 
-- **Engine + contract + sync core** — deterministic fold + zero-based invariant, conflict-free merge, household crypto and range-based reconciliation. Guarded by unit tests, a 200-trial convergence property test, golden vectors, and **cross-language C++↔TS parity** (crypto, wire, reconcile, engine).
-- **`kym_core` + desktop view** — one C++ core behind the `kym` view *and* as a headless `logoscore` hub. Multiple budgets, transaction **edit/delete**, category **archive/delete**, author **attribution**, and per-budget **sharing** are built and shipped. The view is validated both in an offscreen render harness and on a real Basecamp; the **two-way headless hub is proven on the current cpp-sdk** (it converges with a live Basecamp).
-- **Mobile** — Android-first Expo app: amount-first capture with a note field, ML-Kit OCR, offline balances via the shared engine, multiple budgets with a colour-coded switcher, share/**join** (scan a QR), transaction edit/delete, and attribution. Runs on a real arm64 phone; the **light-client Delivery receive path (Waku filter) is being debugged** — send works, but the fleet doesn't always serve the phone's filter subscription ("filter 0"), so two-way phone sync is not yet reliably confirmed.
-- **CLI** — a full working budget with real file-based two-device sync.
-- **Currency** — one budget currency (default CZK) + foreign accounts held as off-budget tracking, no in-budget FX.
+- **Engine, contract and sync core** (`packages/`): a deterministic fold with a zero-based invariant, a conflict-free merge, household crypto and range-based reconciliation. They're guarded by unit tests, a 200-trial convergence property test, golden vectors, and **C++↔TS parity** checks (crypto, wire, reconcile, engine).
+- **Sync**: SDS Reliable Channels over Logos Delivery, through **`loam_core`** on the desktop and hub, and through **loam-transport** on mobile (the shared Loam node when it's installed, otherwise the app's own node). Sync between the phone and the desktop or hub works end-to-end on real arm64 hardware in both directions. A device that missed messages catches up through range-based reconciliation.
+- **`kym_core` + desktop view**: one C++ core behind the `kym` view, which can also run as a headless `logoscore` hub ([`hub/`](hub/README.md); there's no public hub, so run your own). The view has the monthly grid, accounts (checking / savings / credit card / off-budget tracking), credit-card payment envelopes, targets, reconcile, transaction **edit/delete** with author **attribution**, category archive/delete, multiple budgets, and per-budget share/join. The view never blocks on the core: every `kym_core` call is async.
+- **Mobile**: an Expo/React Native app for Android (arm64). It has amount-first quick add, on-device receipt OCR (ML Kit; nothing is uploaded, and every field is an editable prefill), a budget view (assign, targets, reconcile, credit cards, net worth), review with edit/delete, multiple budgets with a colour-coded switcher, and QR share/join with a three-word fingerprint.
+- **CLI**: a full working budget with file-based two-device sync. **CSV bank import (Air Bank format), reports and net worth are CLI-only today.**
+- **Currency**: one budget currency (default CZK). Foreign accounts are off-budget tracking accounts, with no in-budget FX.
 
-**Needs real hardware to finish:** the mobile phone↔fleet receive path (filter service), and OCR accuracy on real receipts. See [`docs/plan.md`](docs/plan.md), [`docs/sync.md`](docs/sync.md), and [`docs/test-guide.md`](docs/test-guide.md).
+**Limitations:** access is per budget, so anyone with the pairing code can read and write the whole budget. There are no per-member roles and no revocation, and attribution isn't a signature. Network metadata (timing, sizes, addresses) is visible to Delivery relays and store nodes, though content is not. OCR accuracy on real receipts is still being tuned. See [`docs/plan.md`](docs/plan.md), [`docs/sync.md`](docs/sync.md) and [`docs/test-guide.md`](docs/test-guide.md).
 
 ## Principle
 
