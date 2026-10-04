@@ -309,7 +309,7 @@ function Shell() {
 
   return (
     <View style={styles.body}>
-      <SharedNodeStatus appName="KYM" debug />
+      <SharedNodeStatus appName="KYM" />
       <View style={styles.content}>
         {tab === "add" && <CaptureScreen goSetup={() => go("setup")} />}
         {tab === "budget" && <BudgetScreen />}
