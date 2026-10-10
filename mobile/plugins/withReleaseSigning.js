@@ -23,6 +23,10 @@ const RELEASE_SIGNING_CONFIG = `
                 keyAlias project.property('KYM_KEY_ALIAS')
                 keyPassword project.property('KYM_KEY_PASSWORD')
             }
+            // F-Droid verifies APKs via the v1 (JAR) signature; RN 0.86's AGP defaults v1 OFF,
+            // producing v2-only APKs F-Droid rejects with "failed to verify". Force v1 on.
+            enableV1Signing true
+            enableV2Signing true
         }`;
 
 module.exports = (config) =>
