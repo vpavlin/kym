@@ -77,6 +77,28 @@ int main() {
   Event g;
   ok(!decodeEventEnvelopeStd(R"({"v":1,"type":"SYNC_REQ","from":"x"})", g), "4.reject-non-event");
   ok(!decodeEventEnvelopeStd("not json", g), "4.reject-garbage");
+  // A peer's EVENT with wrong-typed envelope fields is rejected — never thrown (an exception
+  // escaping a Basecamp core kills the module).
+  bool threw = false, dec = true;
+  try {
+    dec = decodeEventEnvelopeStd(R"({"v":1,"type":"EVENT","event":{"v":1,"id":5,"type":"txn.create","hlc":{"wall":"x","ctr":0,"dev":"A"},"payload":{}}})", g);
+    dec = dec || decodeEventEnvelopeStd(R"({"v":1,"type":7,"event":{}})", g);
+  } catch (...) { threw = true; }
+  ok(!threw && !dec, "4.reject-wrong-typed-event");
+
+  // 4b. RBSR catch-up frames: only the shape respond() can read safely is accepted (a missing
+  //     "bounds" was an assertion abort; a numeric id a type_error).
+  auto cu = [](const char* s) { return catchupWellFormed(nlohmann::json::parse(s)); };
+  ok(cu(R"({"v":2,"t":"fp","from":"p","bounds":["b"],"fps":["x","y"]})"), "4b.fp-ok");
+  ok(cu(R"({"v":2,"t":"fp","from":"p","lo":"a","hi":"z","bounds":[],"fps":["x"]})"), "4b.fp-range-ok");
+  ok(cu(R"({"v":2,"t":"ids","from":"p","ids":["a","b"]})"), "4b.ids-ok");
+  ok(!cu(R"({"v":2,"t":"fp","from":"p","fps":["x","y"]})"), "4b.fp-missing-bounds");
+  ok(!cu(R"({"v":2,"t":"fp","from":"p","bounds":[],"fps":["x","y"]})"), "4b.fp-short-bounds");
+  ok(!cu(R"({"v":2,"t":"fp","from":7,"bounds":[],"fps":["x"]})"), "4b.fp-numeric-from");
+  ok(!cu(R"({"v":2,"t":"ids","from":"p","ids":[5]})"), "4b.ids-numeric");
+  ok(!cu(R"({"v":2,"t":"need","from":"p"})"), "4b.need-missing-ids");
+  ok(!cu(R"({"v":2,"t":"fp","lo":5,"bounds":[],"fps":["x"]})"), "4b.fp-numeric-lo");
+  ok(!cu(R"([1,2])"), "4b.not-object");
 
   // 5. base64 (delivery payload encoding, shared hub↔desktop) — known vector +
   //    round-trips arbitrary binary (incl. non-UTF-8 bytes).

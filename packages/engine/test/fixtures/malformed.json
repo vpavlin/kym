@@ -1,0 +1,443 @@
+{
+ "_doc": "Malformed events another member could write: non-object payloads (string/null/array), wrong-typed ids (accountId/categoryId/txnId/month/toCategoryId/categoryId as number/array/object/bool), a split txn whose legs don't sum to its amount, a balanceByDate target with an unparseable / numeric targetMonth, a non-array `splits` edit, a numeric transferId and a missing onBudget. Folded by BOTH packages/engine/test/malformed.test.mjs and kym_core/test/parity.cpp; neither fold may throw and both must reproduce `expect`. Rules: a non-object payload or a non-string id field skips the event; a txn whose splits don't sum is skipped; an unparseable month disables the by-date target maths (needed 0); non-array splits clear the splits; a non-string transferId is no transfer; a missing/non-bool onBudget is on-budget. Hand-written; expect hand-computed (see the test).",
+ "events": [
+  {
+   "v": 1,
+   "id": "m01",
+   "type": "account.create",
+   "hlc": {
+    "wall": 2000,
+    "ctr": 0,
+    "dev": "peer"
+   },
+   "dev": "peer",
+   "payload": {
+    "accountId": "acct:checking",
+    "name": "Checking",
+    "accountType": "checking",
+    "onBudget": true,
+    "startingBalance": 100000,
+    "startDate": "2026-07-01",
+    "currency": "CZK"
+   }
+  },
+  {
+   "v": 1,
+   "id": "m02",
+   "type": "account.create",
+   "hlc": {
+    "wall": 2001,
+    "ctr": 0,
+    "dev": "peer"
+   },
+   "dev": "peer",
+   "payload": {
+    "accountId": "acct:visa",
+    "name": "Visa",
+    "accountType": "creditCard",
+    "onBudget": true,
+    "startingBalance": 0,
+    "startDate": "2026-07-01",
+    "currency": "CZK"
+   }
+  },
+  {
+   "v": 1,
+   "id": "m03",
+   "type": "account.create",
+   "hlc": {
+    "wall": 2002,
+    "ctr": 0,
+    "dev": "peer"
+   },
+   "dev": "peer",
+   "payload": {
+    "accountId": "acct:savings",
+    "name": "Savings (no onBudget field: defaults on)",
+    "accountType": "savings",
+    "startingBalance": 1000
+   }
+  },
+  {
+   "v": 1,
+   "id": "m04",
+   "type": "category.create",
+   "hlc": {
+    "wall": 2003,
+    "ctr": 0,
+    "dev": "peer"
+   },
+   "dev": "peer",
+   "payload": {
+    "categoryId": "cat:groc",
+    "groupId": "g",
+    "name": "Groceries"
+   }
+  },
+  {
+   "v": 1,
+   "id": "m05",
+   "type": "category.create",
+   "hlc": {
+    "wall": 2004,
+    "ctr": 0,
+    "dev": "peer"
+   },
+   "dev": "peer",
+   "payload": {
+    "categoryId": "cat:rent",
+    "groupId": "g",
+    "name": "Rent"
+   }
+  },
+  {
+   "v": 1,
+   "id": "m06",
+   "type": "assign",
+   "hlc": {
+    "wall": 2005,
+    "ctr": 0,
+    "dev": "peer"
+   },
+   "dev": "peer",
+   "payload": {
+    "categoryId": "cat:groc",
+    "month": "2026-07",
+    "amount": 30000,
+    "mode": "delta"
+   }
+  },
+  {
+   "v": 1,
+   "id": "m07",
+   "type": "txn.create",
+   "hlc": {
+    "wall": 2006,
+    "ctr": 0,
+    "dev": "peer"
+   },
+   "dev": "peer",
+   "payload": "junk payload (a string, not an object)"
+  },
+  {
+   "v": 1,
+   "id": "m08",
+   "type": "txn.create",
+   "hlc": {
+    "wall": 2007,
+    "ctr": 0,
+    "dev": "peer"
+   },
+   "dev": "peer",
+   "payload": null
+  },
+  {
+   "v": 1,
+   "id": "m09",
+   "type": "account.create",
+   "hlc": {
+    "wall": 2008,
+    "ctr": 0,
+    "dev": "peer"
+   },
+   "dev": "peer",
+   "payload": [
+    1,
+    2,
+    3
+   ]
+  },
+  {
+   "v": 1,
+   "id": "m10",
+   "type": "account.create",
+   "hlc": {
+    "wall": 2009,
+    "ctr": 0,
+    "dev": "peer"
+   },
+   "dev": "peer",
+   "payload": {
+    "accountId": 5,
+    "name": "numeric id",
+    "accountType": "checking",
+    "onBudget": true,
+    "startingBalance": 999
+   }
+  },
+  {
+   "v": 1,
+   "id": "m11",
+   "type": "category.create",
+   "hlc": {
+    "wall": 2010,
+    "ctr": 0,
+    "dev": "peer"
+   },
+   "dev": "peer",
+   "payload": {
+    "categoryId": 7,
+    "groupId": "g",
+    "name": "numeric id"
+   }
+  },
+  {
+   "v": 1,
+   "id": "m12",
+   "type": "assign",
+   "hlc": {
+    "wall": 2011,
+    "ctr": 0,
+    "dev": "peer"
+   },
+   "dev": "peer",
+   "payload": {
+    "categoryId": "cat:groc",
+    "month": 202607,
+    "amount": 5000
+   }
+  },
+  {
+   "v": 1,
+   "id": "m13",
+   "type": "txn.create",
+   "hlc": {
+    "wall": 2012,
+    "ctr": 0,
+    "dev": "peer"
+   },
+   "dev": "peer",
+   "payload": {
+    "txnId": 9,
+    "accountId": "acct:checking",
+    "amount": -777,
+    "date": "2026-07-03",
+    "categoryId": "cat:groc"
+   }
+  },
+  {
+   "v": 1,
+   "id": "m14",
+   "type": "txn.create",
+   "hlc": {
+    "wall": 2013,
+    "ctr": 0,
+    "dev": "peer"
+   },
+   "dev": "peer",
+   "payload": {
+    "txnId": "t:badsplit",
+    "accountId": "acct:checking",
+    "amount": -3000,
+    "date": "2026-07-04",
+    "splits": [
+     {
+      "categoryId": "cat:groc",
+      "amount": -1000
+     },
+     {
+      "categoryId": "cat:rent",
+      "amount": -1000
+     }
+    ]
+   }
+  },
+  {
+   "v": 1,
+   "id": "m15",
+   "type": "category.target",
+   "hlc": {
+    "wall": 2014,
+    "ctr": 0,
+    "dev": "peer"
+   },
+   "dev": "peer",
+   "payload": {
+    "categoryId": "cat:groc",
+    "targetType": "balanceByDate",
+    "amount": 50000,
+    "targetMonth": "soon"
+   }
+  },
+  {
+   "v": 1,
+   "id": "m16",
+   "type": "category.target",
+   "hlc": {
+    "wall": 2015,
+    "ctr": 0,
+    "dev": "peer"
+   },
+   "dev": "peer",
+   "payload": {
+    "categoryId": "cat:rent",
+    "targetType": "balanceByDate",
+    "amount": 20000,
+    "targetMonth": 202612
+   }
+  },
+  {
+   "v": 1,
+   "id": "m17",
+   "type": "txn.create",
+   "hlc": {
+    "wall": 2016,
+    "ctr": 0,
+    "dev": "peer"
+   },
+   "dev": "peer",
+   "payload": {
+    "txnId": "t1",
+    "accountId": "acct:checking",
+    "amount": -5000,
+    "date": "2026-07-10",
+    "categoryId": "cat:groc"
+   }
+  },
+  {
+   "v": 1,
+   "id": "m18",
+   "type": "txn.create",
+   "hlc": {
+    "wall": 2017,
+    "ctr": 0,
+    "dev": "peer"
+   },
+   "dev": "peer",
+   "payload": {
+    "txnId": "t2",
+    "accountId": "acct:checking",
+    "amount": -2000,
+    "date": "2026-07-11",
+    "splits": [
+     {
+      "categoryId": "cat:groc",
+      "amount": -1000
+     },
+     {
+      "categoryId": "cat:rent",
+      "amount": -1000
+     }
+    ]
+   }
+  },
+  {
+   "v": 1,
+   "id": "m19",
+   "type": "txn.edit",
+   "hlc": {
+    "wall": 2018,
+    "ctr": 0,
+    "dev": "peer"
+   },
+   "dev": "peer",
+   "payload": {
+    "txnId": "t2",
+    "splits": "not an array"
+   }
+  },
+  {
+   "v": 1,
+   "id": "m20",
+   "type": "txn.create",
+   "hlc": {
+    "wall": 2019,
+    "ctr": 0,
+    "dev": "peer"
+   },
+   "dev": "peer",
+   "payload": {
+    "txnId": "t3",
+    "accountId": "acct:visa",
+    "amount": 2000,
+    "date": "2026-07-12",
+    "transferId": 5
+   }
+  },
+  {
+   "v": 1,
+   "id": "m21",
+   "type": "txn.delete",
+   "hlc": {
+    "wall": 2020,
+    "ctr": 0,
+    "dev": "peer"
+   },
+   "dev": "peer",
+   "payload": {
+    "txnId": [
+     "t1"
+    ]
+   }
+  },
+  {
+   "v": 1,
+   "id": "m22",
+   "type": "move",
+   "hlc": {
+    "wall": 2021,
+    "ctr": 0,
+    "dev": "peer"
+   },
+   "dev": "peer",
+   "payload": {
+    "fromCategoryId": "cat:groc",
+    "toCategoryId": {
+     "x": 1
+    },
+    "month": "2026-07",
+    "amount": 100
+   }
+  },
+  {
+   "v": 1,
+   "id": "m23",
+   "type": "category.delete",
+   "hlc": {
+    "wall": 2022,
+    "ctr": 0,
+    "dev": "peer"
+   },
+   "dev": "peer",
+   "payload": {
+    "categoryId": false
+   }
+  }
+ ],
+ "expect": {
+  "currentMonth": "2026-07",
+  "balances": {
+   "acct:checking": 93000,
+   "acct:visa": 2000,
+   "acct:savings": 1000
+  },
+  "categoryAvailable": {
+   "cat:groc": 25000,
+   "cat:rent": 0
+  },
+  "creditCardPayments": {
+   "acct:visa": 0
+  },
+  "activity": {
+   "cat:groc|2026-07": -5000
+  },
+  "income": 99000,
+  "totalAssigned": 30000,
+  "cashOverspending": 0,
+  "readyToAssign": 69000,
+  "targetNeeded": {
+   "cat:groc": 0,
+   "cat:rent": 0
+  },
+  "invariantOk": true,
+  "accountIds": [
+   "acct:checking",
+   "acct:visa",
+   "acct:savings"
+  ],
+  "categoryIds": [
+   "cat:groc",
+   "cat:rent"
+  ]
+ }
+}
