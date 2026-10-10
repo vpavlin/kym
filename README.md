@@ -61,12 +61,12 @@ Full command set: `init · account · category · income · spend · assign · m
 **Desktop (Basecamp)** — install two packages, **`kym_core`** (the core module) and **`kym`** (the view). Add a package repository in Basecamp → Settings → Package Repositories:
 
 ```
-https://raw.githubusercontent.com/vpavlin/kym/master/repo/logos-repo.json
+https://apps.vpavlin.xyz/logos-repo.json
 ```
 
 Releases are cut by pushing a `module-v*` tag: CI builds the portable `.lgx` and refreshes `repo/index.json`. During active development the packages are also served from a **self-hosted LAN repo** (both modules rebuilt with `regen.sh` and served over HTTPS), which is how the maintainer's Basecamp installs day to day.
 
-**Mobile app** — Android APK via a self-hosted **F-Droid** repo (arm64). The APK is built and **signed locally** (`scripts/build-apk.sh`) — the signing key never touches CI.
+**Mobile app** — Android APK from the **F-Droid** repo at [apps.vpavlin.xyz](https://apps.vpavlin.xyz) (arm64). The APK is built and **signed locally** (`scripts/build-apk.sh`) — the signing key never touches CI.
 
 ## Status
 
