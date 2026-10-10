@@ -94,7 +94,7 @@ test("paying the credit card reduces its payment category and its debt", () => {
   assert.ok(inv.ok, JSON.stringify(inv));
 });
 
-test("splits must sum to the parent amount and fan out to categories", () => {
+test("splits must sum to the parent amount (else the txn is skipped) and fan out to categories", () => {
   const h = mk("A");
   const events = [
     ev.accountCreate(h(), { accountId: "chk", name: "Checking", accountType: AccountType.CHECKING, startingBalance: 100000, startDate: dateIn(M) }),
@@ -112,7 +112,12 @@ test("splits must sum to the parent amount and fan out to categories", () => {
 
   const bad = [...events.slice(0, -1), ev.txnCreate(h(), { txnId: "t2", accountId: "chk", amount: -30000, date: dateIn(M),
     splits: [{ categoryId: "groc", amount: -18000 }, { categoryId: "home", amount: -5000 }] })];
-  assert.throws(() => computeState(bad), /must sum to txn amount/);
+  // A split txn whose legs don't sum is malformed: skipped whole (no balance, no activity) — it used
+  // to throw, and one such event from another member broke every fold of the budget.
+  const sb = computeState(bad);
+  assert.equal(sb.balances.chk, 100000);
+  assert.equal(sb.categoryAvailable.groc, 40000);
+  assert.ok(checkInvariant(sb).ok);
 });
 
 test("a txn edit is a superseding event (recategorize), not a mutation", () => {

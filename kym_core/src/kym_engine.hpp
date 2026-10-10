@@ -82,6 +82,37 @@ inline std::string jdate(const nlohmann::json& j, const char* key) {
   return buf;
 }
 
+// The id fields an event must carry AS STRINGS to be folded at all. Another member wrote this
+// event: a payload that isn't an object, or an id that isn't a string (a number, null, an array),
+// is SKIPPED — it can't be attributed to any account/category/txn, and reading it as "" would fold
+// it into a phantom entity. Mirrors wellFormed() in engine.mjs (malformed.json parity fixture).
+inline bool wellFormed(const Event& e) {
+  if (!e.payload.is_object()) return false;
+  static const std::map<std::string, std::vector<const char*>> REQUIRED = {
+    {"account.create", {"accountId"}}, {"account.edit", {"accountId"}},
+    {"category.create", {"categoryId"}}, {"category.edit", {"categoryId"}}, {"category.delete", {"categoryId"}},
+    {"category.archive", {"categoryId"}}, {"category.unarchive", {"categoryId"}}, {"category.target", {"categoryId"}},
+    {"group.create", {"groupId"}}, {"group.delete", {"groupId"}},
+    {"assign", {"categoryId", "month"}}, {"move", {"fromCategoryId", "toCategoryId", "month"}},
+    {"txn.create", {"txnId"}}, {"txn.edit", {"txnId"}}, {"txn.delete", {"txnId"}},
+    {"member.add", {"memberId"}}, {"member.role", {"memberId"}}, {"member.remove", {"memberId"}},
+  };
+  auto it = REQUIRED.find(e.type);
+  if (it == REQUIRED.end()) return true;
+  for (const char* k : it->second) {
+    auto f = e.payload.find(k);
+    if (f == e.payload.end() || !f->is_string()) return false;
+  }
+  return true;
+}
+
+// "YYYY-MM…" with digits where monthDiff reads them; anything else would make std::stoi throw.
+inline bool isYm(const std::string& s) {
+  if (s.size() < 7 || s[4] != '-') return false;
+  for (int i : {0, 1, 2, 3, 5, 6}) if (s[i] < '0' || s[i] > '9') return false;
+  return true;
+}
+
 struct Split { std::string categoryId; Money amount; };
 
 struct Account { std::string id, name, type; bool onBudget; Money startingBalance; std::string currency; };
@@ -130,12 +161,15 @@ inline Admission admitEvents(const std::vector<Event>& ordered) {
     auto it = members.find(id); return it == members.end() ? nullptr : &it->second;
   };
   for (const auto& e : ordered) {
+    if (!wellFormed(e)) continue;             // malformed (other member's) event: never folded
     const std::string& author = e.hlc.dev;
     if (e.type == "group.init") {
       out.isGroup = true;
-      std::string founder = jget(e.payload, "founderId", author);
+      std::string founder = jget(e.payload, "founderId", std::string());
+      if (founder.empty()) founder = author;
       if (!members.count(founder)) {
-        members[founder] = Member{founder, jget(e.payload, "founderName", founder), "admin", true};
+        std::string fname = jget(e.payload, "founderName", std::string());
+        members[founder] = Member{founder, fname.empty() ? founder : fname, "admin", true};
         order.push_back(founder);
       }
       out.admitted.push_back(e);
@@ -149,7 +183,8 @@ inline Admission admitEvents(const std::vector<Event>& ordered) {
       const std::string mid = jget(e.payload, "memberId", std::string());
       if (e.type == "member.add") {
         if (!mid.empty() && !members.count(mid)) {
-          members[mid] = Member{mid, jget(e.payload, "name", mid), jget(e.payload, "role", std::string("viewer")), true};
+          std::string name = jget(e.payload, "name", std::string()), role = jget(e.payload, "role", std::string());
+          members[mid] = Member{mid, name.empty() ? mid : name, role.empty() ? std::string("viewer") : role, true};
           order.push_back(mid);
         }
       } else if (e.type == "member.role") {
@@ -174,10 +209,14 @@ struct TxnView {
   std::vector<Split> splits;
 };
 
-inline std::vector<Split> txnLegs(const TxnView& t) {
+// `ok` is false for a split txn whose legs don't sum to its amount: the txn is malformed and the
+// fold skips it entirely (it used to throw, which took the module down on every fold of the budget
+// for everyone holding it). Mirrors txnCategoryLegs() returning null in engine.mjs.
+inline std::vector<Split> txnLegs(const TxnView& t, bool& ok) {
+  ok = true;
   if (t.hasSplits && !t.splits.empty()) {
     Money sum = 0; for (auto& sp : t.splits) sum += sp.amount;
-    if (sum != t.amount) throw std::runtime_error("split amounts must sum to txn amount");
+    if (sum != t.amount) { ok = false; return {}; }
     return t.splits;
   }
   if (t.hasCategory) return {{t.categoryId, t.amount}};
@@ -273,11 +312,13 @@ inline BudgetState computeState(const std::vector<Event>& rawEvents, std::option
       v.categoryId = jget(e.payload, "categoryId", std::string());
     }
     if (e.payload.contains("transferId")) v.transferId = jget(e.payload, "transferId", std::string());
-    if (e.payload.contains("splits") && e.payload.at("splits").is_array()) {
+    if (e.payload.contains("splits")) {
+      // Non-array `splits` (null, a string) = no splits, like engine.mjs's Array.isArray check.
       v.splits.clear();
-      for (const auto& sp : e.payload.at("splits"))
-        v.splits.push_back(Split{jget(sp, "categoryId", std::string()), jget(sp, "amount", (Money)0)});
-      v.hasSplits = true;
+      v.hasSplits = e.payload.at("splits").is_array();
+      if (v.hasSplits)
+        for (const auto& sp : e.payload.at("splits"))
+          v.splits.push_back(Split{jget(sp, "categoryId", std::string()), jget(sp, "amount", (Money)0)});
     }
   };
   for (const auto& e : ordered) {
@@ -314,8 +355,10 @@ inline BudgetState computeState(const std::vector<Event>& rawEvents, std::option
     const auto ait = accounts.find(r.v.accountId);
     if (ait == accounts.end()) continue;
     const auto& acct = ait->second;
+    bool legsOk = true;
+    auto legs = txnLegs(r.v, legsOk);
+    if (!legsOk) continue;                    // splits don't sum: malformed txn, skipped whole
     balance[r.v.accountId] += r.v.amount;
-    auto legs = txnLegs(r.v);
     std::string month = monthOf(r.v.date);
     bool onCredit = acct.onBudget && CREDIT_TYPES.count(acct.type);
     for (const auto& leg : legs) {
@@ -379,7 +422,7 @@ inline BudgetState computeState(const std::vector<Event>& rawEvents, std::option
     Money needed = 0, funded = 0;
     if (t.type == "monthly") { funded = assignedThisMonth; needed = std::max<Money>(0, t.amount - assignedThisMonth); }
     else if (t.type == "balance") { funded = avail; needed = std::max<Money>(0, t.amount - avail); }
-    else if (t.type == "balanceByDate" && !t.targetMonth.empty() && !currentMonth.empty()) {
+    else if (t.type == "balanceByDate" && isYm(t.targetMonth) && isYm(currentMonth)) {
       long monthsLeft = std::max<long>(1, monthDiff(currentMonth, t.targetMonth) + 1);
       Money remaining = std::max<Money>(0, t.amount - avail);
       Money perMonth = (remaining + monthsLeft - 1) / monthsLeft;

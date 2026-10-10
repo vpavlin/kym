@@ -921,15 +921,15 @@ void KymCoreImpl::loadBudgets() {
                 haveRegistry = true;
                 for (const auto &e : j["budgets"]) {
                     if (!e.is_object() || !e.contains("id")) continue;
-                    std::string id = e.value("id", std::string());
-                    std::string name = e.value("name", std::string("Budget"));
-                    std::string color = e.value("color", std::string());
+                    std::string id = kym::jget(e, "id", std::string());
+                    std::string name = kym::jget(e, "name", std::string("Budget"));
+                    std::string color = kym::jget(e, "color", std::string());
                     // The FIRST/default budget lives at the ROOT (in-place migration);
                     // additional budgets live in <root>/<id>.
-                    std::string dir = e.value("root", false) ? m_dataDir : (m_dataDir + "/" + id);
+                    std::string dir = kym::jget(e, "root", false) ? m_dataDir : (m_dataDir + "/" + id);
                     addBudget(id, name, color, dir);
                 }
-                m_current = j.value("current", std::string());
+                m_current = kym::jget(j, "current", std::string());
             }
         }
     }
@@ -1309,8 +1309,9 @@ void KymCoreImpl::ingestRaw(const std::string &contentTopic, const std::string &
     // NOTE: these frames carry NO "type" field (t=fp/ids/need only) — the qaku wire shape — so this
     // MUST run BEFORE the type-required guard below, or desktop/crib silently drop every catch-up
     // frame (the bug that made 0.7.7's v2 path dead on the wire while the pure convergence test passed).
-    const std::string t = env.value("t", std::string());
-    if (env.value("v", 0) == 2 && (t == "fp" || t == "ids" || t == "need")) {
+    const std::string t = kym::jget(env, "t", std::string());
+    if (kym::jget(env, "v", 0) == 2 && (t == "fp" || t == "ids" || t == "need")) {
+        if (!kym::catchupWellFormed(env)) { m_rxDropped++; return; }   // malformed: respond() would throw/abort
         const int64_t nowCu = (int64_t)std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::system_clock::now().time_since_epoch()).count();
         // Throttle ROUND-OPENING fps (full range: no lo/hi) to one answer per (peer, budget)
@@ -1356,7 +1357,7 @@ void KymCoreImpl::ingestRaw(const std::string &contentTopic, const std::string &
     if (type == "SUMMARY") {
         // A peer's event-id set. Reconcile against ours; re-serve ONLY the events
         // it lacks. Nothing to send when the sets already match — the whole point.
-        if (env.contains("from") && env["from"].get<std::string>() == m_deviceId) return; // ignore our own
+        if (kym::jget(env, "from", std::string()) == m_deviceId) return; // ignore our own
         std::vector<kym::rbsr::Item> theirs, mine;
         if (env.contains("items") && env["items"].is_array())
             for (const auto &it : env["items"])
@@ -1537,7 +1538,7 @@ std::string KymCoreImpl::snapshot() {
             std::stringstream ss; ss << rf.rdbuf();
             auto j = json::parse(ss.str(), nullptr, false);
             if (j.is_object()) {
-                std::string persisted = j.value("current", std::string());
+                std::string persisted = kym::jget(j, "current", std::string());
                 if (!persisted.empty() && m_budgets.count(persisted)) m_current = persisted;
             }
         }

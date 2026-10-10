@@ -231,6 +231,50 @@ int main() {
     ok(categoryHistory(log) == std::set<std::string>{"cat:edited", "cat:from", "cat:split", "cat:to"}, "8.categoryHistory");
   }
 
+  // 9. malformed events another member could write (non-object payloads, wrong-typed ids, a split
+  //    that doesn't sum, an unparseable targetMonth, non-array splits, numeric transferId) — the SAME
+  //    fixture + expectation packages/engine/test/malformed.test.mjs checks. Neither fold may throw:
+  //    an exception here kills the Basecamp module for everyone holding the budget.
+  {
+    std::ifstream f("../../packages/engine/test/fixtures/malformed.json");
+    ok((bool)f, "9.fixture-readable (run from kym_core/test)");
+    if (f) {
+      nlohmann::json fx = nlohmann::json::parse(f);
+      std::vector<Event> ev;
+      for (const auto& j : fx["events"]) ev.push_back(eventFromJson(j));
+      const auto& x = fx["expect"];
+      try {
+        auto s = computeState(ev);
+        ok(s.currentMonth == x["currentMonth"].get<std::string>(), "9.currentMonth");
+        ok(s.balances.size() == x["balances"].size(), "9.no-extra-accounts");
+        for (auto& [k, v] : x["balances"].items()) eq(s.balances[k], v.get<Money>(), "9.balance " + k);
+        std::vector<std::string> accIds; for (auto& a : s.accounts) accIds.push_back(a.id);
+        ok(accIds == x["accountIds"].get<std::vector<std::string>>(), "9.accountIds");
+        ok(s.categoryIds == x["categoryIds"].get<std::vector<std::string>>(), "9.categoryIds");
+        for (auto& [k, v] : x["categoryAvailable"].items()) eq(s.categoryAvailable[k], v.get<Money>(), "9.available " + k);
+        for (auto& [k, v] : x["creditCardPayments"].items()) eq(s.creditCardPayments[k], v.get<Money>(), "9.ccp " + k);
+        for (auto& [k, v] : x["activity"].items()) {
+          const auto bar = k.find('|');
+          const std::string c = k.substr(0, bar), m = k.substr(bar + 1);
+          Money act = 999999999;
+          for (const auto& r : s.categoryMonths) if (r.categoryId == c && r.month == m) act = r.activity;
+          eq(act, v.get<Money>(), "9.activity " + k);
+        }
+        eq(s.income, x["income"].get<Money>(), "9.income");
+        eq(s.totalAssigned, x["totalAssigned"].get<Money>(), "9.totalAssigned");
+        eq(s.cashOverspending, x["cashOverspending"].get<Money>(), "9.cashOverspending");
+        eq(s.readyToAssign, x["readyToAssign"].get<Money>(), "9.rta");
+        for (auto& [k, v] : x["targetNeeded"].items()) eq(s.targetProgress[k].needed, v.get<Money>(), "9.target " + k);
+        ok(checkInvariant(s).ok == x["invariantOk"].get<bool>(), "9.invariant");
+        std::vector<Event> rev(ev.rbegin(), ev.rend());
+        eq(computeState(rev).readyToAssign, x["readyToAssign"].get<Money>(), "9.converge-rta");
+        (void)categoryHistory(ev);   // the delete guard reads the same payloads
+      } catch (const std::exception& ex) {
+        ok(false, std::string("9.fold threw: ") + ex.what());
+      }
+    }
+  }
+
   std::cout << (failures ? "PARITY FAILED" : "PARITY OK") << " — " << (checks - failures) << "/" << checks << " checks passed\n";
   return failures ? 1 : 0;
 }
