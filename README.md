@@ -14,6 +14,7 @@ KYM is an envelope budget (a YNAB alternative) with no server and no cloud custo
 - **`packages/sync/`** — household crypto (ChaCha20-Poly1305, HMAC topic) + the Delivery wire envelope + range-based set reconciliation (Negentropy/RBSR).
 - **`cli/`** — a full headless budget (envelopes, targets, import, categorize, reconcile, reports) plus a convergence demo proving two devices editing offline **fold to the same correct budget** after sync.
 - **`docs/`** — [`architecture.md`](docs/architecture.md), [`data-model.md`](docs/data-model.md), [`sync.md`](docs/sync.md), [`decisions.md`](docs/decisions.md) (the decision log / ADRs), [`logos-dev-notes.md`](docs/logos-dev-notes.md) (hard-won Basecamp/Delivery gotchas), [`plan.md`](docs/plan.md), [`test-guide.md`](docs/test-guide.md).
+  - [`demo.md`](docs/demo.md): a 5-minute demo script (laptop + phone).
 
 ## The one hard problem, named up front
 
