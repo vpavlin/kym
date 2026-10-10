@@ -152,7 +152,7 @@ export function PairingScreen() {
           text: "Add as new budget",
           onPress: () => {
             joinBudget("Shared budget", b32)
-              .then(() => { setJoinCode(""); Alert.alert("Joined household", "Added as a new budget. Confirm the fingerprint on the Pair tab matches the other device."); })
+              .then(() => { setJoinCode(""); Alert.alert("Joined household", "Added as a new budget. Confirm the fingerprint on the Share tab matches the other device."); })
               .catch((e) => Alert.alert("Couldn't join", String(e?.message ?? e)));
           },
         },

@@ -576,7 +576,7 @@ export function BudgetProvider({ children }: { children: React.ReactNode }) {
 
   // Create a NEW budget = a new household: generate its own secret (this device
   // hosts it), register it, switch to it, and start syncing its topic. Share its
-  // pairing code (Pair tab) to bring in your other devices / your partner.
+  // pairing code (Share tab) to bring in your other devices / your partner.
   const createBudget = useCallback(async (name: string) => {
     const id = newBudgetId();
     const idn = await ensureSecret(id); // generate + persist a fresh household key

@@ -1,9 +1,10 @@
-# KYM Mobile — capture app (Phase 2 MVP)
+# KYM Mobile
 
-A thin, Android-first Expo (React Native + TypeScript) companion to the KYM
-Basecamp desktop module. Its one job: **capture an expense in under 10 seconds**,
-fully offline, and show budget balances computed by the **same shared engine**
-the desktop runs. No Delivery/Waku networking yet (that is Phase 3 — issues #3/#4).
+The Android app (Expo, React Native + TypeScript) of KYM, the household budget. It captures an
+expense in under 10 seconds, fully offline, shows balances computed by the **same shared engine**
+the Basecamp desktop runs, and syncs the household's budget with the desktop and other phones over
+Logos Delivery: through the device's shared Loam node when Loam is installed, otherwise its own
+node. A five-minute walkthrough is in [`../docs/demo.md`](../docs/demo.md).
 
 This is the mobile half described in `docs/plan.md` §6 and `docs/architecture.md`.
 The wire contract and fold engine live in `packages/contract` and `packages/engine`
@@ -21,8 +22,8 @@ re-implement money/HLC/fold logic.
 | **Offline balances via the shared engine** | ✅ | `Budget` tab folds the log with `@kym/engine.computeState` → Ready to Assign, per-category Available, account balances, and the `checkInvariant` oracle. Nothing is stored; every number is a projection. |
 | **Review / inbox + set category later** | ✅ | `Review` tab lists transactions (uncategorized first); tapping one emits a `txn.edit` (superseding event) to assign a category or toggle cleared. |
 | **Setup / seed** | ✅ | `Setup` tab: one-tap demo budget (2 accounts, 2 groups, 6 categories, this-month assignments), plus add-account / add-category and a log reset. |
-| **Pairing** | 🟡 stub | `Pair` tab generates a **real** 32-byte household secret (SecureStore-persisted), derives the real topic + 3-word pgp-words fingerprint (ported from Perun `docs/pairing-crypto.md`, re-namespaced `kym`), and renders the pairing QR. **No networking** — clearly banner-marked. |
-| **Delivery / Waku sync** | ❌ | Out of scope for Phase 2. See issues #3 (bridge) / #4 (liblogosdelivery). |
+| **Pairing / households** | ✅ | `Share` tab: a 32-byte household secret (SecureStore), its topic and 3-word fingerprint, a pairing QR and code; join another household by code or QR. Several budgets per device. |
+| **Sync** | ✅ | Logos Delivery reliable channels, encrypted per household, with catch-up for devices that were offline. Uses the Loam shared node when installed (approve KYM in Loam), otherwise an embedded node. |
 
 Money is **always integer milliunits** — `toMilli`/`fromMilli` from `@kym/contract`
 are the only float boundary, used at the UI edge only.
